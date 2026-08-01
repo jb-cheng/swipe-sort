@@ -5,7 +5,6 @@ import {
   FlatList,
   Pressable,
   StyleSheet,
-  useColorScheme,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -13,8 +12,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { HistoryRecord } from '../lib/types';
 import { loadHistory, clearHistory } from '../lib/storage';
 import { fetchHistory, clearServerHistory } from '../lib/api';
+import { useTheme } from '../lib/ThemeContext';
 import FileIcon from '../components/FileIcon';
 import EmptyIllustration from '../components/EmptyIllustration';
+import TutorialTarget from '../components/TutorialTarget';
 
 function formatTime(ts: number) {
   const d = new Date(ts);
@@ -22,8 +23,7 @@ function formatTime(ts: number) {
 }
 
 export default function HistoryScreen() {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const { colors, isDark } = useTheme();
   const [history, setHistory] = useState<HistoryRecord[]>([]);
 
   useFocusEffect(
@@ -41,7 +41,7 @@ export default function HistoryScreen() {
         return;
       }
     } catch {
-      // server unreachable — fall back to local
+      // server unreachable, fall back to local
     }
     // Fallback: load from AsyncStorage
     const local = await loadHistory();
@@ -59,7 +59,7 @@ export default function HistoryScreen() {
       style={[
         styles.row,
         {
-          backgroundColor: isDark ? '#1e293b' : '#fff',
+          backgroundColor: colors.surface,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 1 },
           shadowOpacity: 0.05,
@@ -72,10 +72,10 @@ export default function HistoryScreen() {
         <FileIcon type={item.file.type} size={28} color={item.action.color} />
       </View>
       <View style={styles.info}>
-        <Text style={[styles.name, { color: isDark ? '#fff' : '#0f172a' }]} numberOfLines={1}>
+        <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>
           {item.file.name}.{item.file.extension}
         </Text>
-        <Text style={[styles.meta, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+        <Text style={[styles.meta, { color: colors.textSecondary }]}>
           {formatTime(item.timestamp)}
         </Text>
       </View>
@@ -87,15 +87,15 @@ export default function HistoryScreen() {
 
   return (
     <SafeAreaView
-      style={[styles.container, { backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}
+      style={[styles.container, { backgroundColor: colors.bg }]}
       edges={['top']}
     >
       <StatusBar style={isDark ? 'light' : 'dark'} />
 
       <View style={styles.header}>
         <View>
-          <Text style={[styles.title, { color: isDark ? '#fff' : '#0f172a' }]}>History</Text>
-          <Text style={[styles.subtitle, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+          <Text style={[styles.title, { color: colors.text }]}>History</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             {history.length} sorted {history.length === 1 ? 'file' : 'files'}
           </Text>
         </View>
@@ -106,22 +106,24 @@ export default function HistoryScreen() {
         )}
       </View>
 
-      <FlatList
-        data={history}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={styles.list}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <EmptyIllustration
-              emoji="📋"
-              title="No history yet"
-              subtitle="Sort some files and they will appear here."
-            />
-          </View>
-        }
-      />
+      <TutorialTarget id="history-content" style={styles.listTarget}>
+        <FlatList
+          data={history}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <EmptyIllustration
+                emoji="📋"
+                title="No history yet"
+                subtitle="Sort some files and they will appear here."
+              />
+            </View>
+          }
+        />
+      </TutorialTarget>
     </SafeAreaView>
   );
 }
@@ -157,6 +159,9 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontWeight: '700',
     fontSize: 14,
+  },
+  listTarget: {
+    flex: 1,
   },
   list: {
     paddingHorizontal: 16,

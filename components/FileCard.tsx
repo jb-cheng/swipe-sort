@@ -24,6 +24,7 @@ interface Props {
   onSortStart: () => void;
   onSortComplete: (action: SortAction) => void;
   onTap?: (file: FileItem) => void;
+  onLongPress?: (file: FileItem) => void;
 }
 
 const SWIPE_THRESHOLD = 0.22;
@@ -39,6 +40,7 @@ export default function FileCard({
   onSortStart,
   onSortComplete,
   onTap,
+  onLongPress,
 }: Props) {
   const { width, height } = useWindowDimensions();
   const meta = FILE_META[file.type] ?? FILE_META.unknown;
@@ -131,10 +133,12 @@ export default function FileCard({
 
   const hintDir = useSharedValue<SwipeDirection>('none');
   const lastTapTime = useSharedValue(0);
+  const longPressFired = useSharedValue(false);
 
   const panWithHints = Gesture.Pan()
     .enabled(!sorting)
     .onBegin((e) => {
+      longPressFired.value = false;
       scale.value = withTiming(1.02, { duration: 120 });
       startX.value = e.absoluteX;
       startY.value = e.absoluteY;
@@ -162,7 +166,7 @@ export default function FileCard({
 
       // Double-tap detection: fire onTap only on the second tap within 300ms
       const totalMovement = Math.sqrt(dx * dx + dy * dy);
-      if (totalMovement < TAP_PX_THRESHOLD && onTap) {
+      if (totalMovement < TAP_PX_THRESHOLD && onTap && !longPressFired.value) {
         const now = Date.now();
         if (lastTapTime.value > 0 && now - lastTapTime.value < DOUBLE_TAP_MS) {
           // Double-tap detected — fire callback
@@ -186,8 +190,22 @@ export default function FileCard({
       }
     });
 
+  const longPress = Gesture.LongPress()
+    .enabled(!sorting && !!onLongPress)
+    .minDuration(500)
+    .maxDistance(10)
+    .onStart(() => {
+      longPressFired.value = true;
+      scale.value = withTiming(1, { duration: 100 });
+      if (onLongPress) {
+        runOnJS(onLongPress)(file);
+      }
+    });
+
+  const composed = Gesture.Simultaneous(panWithHints, longPress);
+
   return (
-    <GestureDetector gesture={panWithHints}>
+    <GestureDetector gesture={composed}>
       <Animated.View style={[styles.card, animatedStyle]}>
         <View style={[styles.gradientBase, { backgroundColor: meta.gradient[0] }]} />
         <View style={[styles.gradientOverlay, { backgroundColor: meta.gradient[1] }]} />

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { View, Text, Pressable, StyleSheet, useColorScheme } from 'react-native';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -9,6 +9,7 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useTheme } from '../lib/ThemeContext';
 
 interface ActionConfig {
   label: string;
@@ -25,8 +26,7 @@ interface Props {
 }
 
 export default function EmptyIllustration({ emoji, iconName, title, subtitle, actions }: Props) {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const { colors } = useTheme();
 
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
@@ -64,15 +64,15 @@ export default function EmptyIllustration({ emoji, iconName, title, subtitle, ac
         {emoji ? (
           <Text style={styles.emoji}>{emoji}</Text>
         ) : iconName ? (
-          <Ionicons name={iconName} size={64} color={isDark ? '#475569' : '#cbd5e1'} />
+          <Ionicons name={iconName} size={64} color={colors.textMuted} />
         ) : (
           <Text style={styles.emoji}>📂</Text>
         )}
       </Animated.View>
-      <Text style={[styles.title, { color: isDark ? '#fff' : '#0f172a' }]}>
+      <Text style={[styles.title, { color: colors.text }]}>
         {title}
       </Text>
-      <Text style={[styles.subtitle, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+      <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
         {subtitle}
       </Text>
       {actions?.map((action, index) => (
@@ -81,7 +81,7 @@ export default function EmptyIllustration({ emoji, iconName, title, subtitle, ac
             onPress={action.onPress}
             disabled={action.disabled}
             style={({ pressed }) => ({
-              backgroundColor: '#3B82F6',
+              backgroundColor: colors.accent,
               borderRadius: 16,
               paddingHorizontal: 28,
               paddingVertical: 14,

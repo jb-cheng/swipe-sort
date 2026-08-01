@@ -1,8 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SortAction, HistoryRecord } from './types';
+import { ThemeName, ThemeMode } from './theme';
 
 const ACTIONS_KEY = '@sortaroo/actions';
 const HISTORY_KEY = '@sortaroo/history';
+const THEME_KEY = '@sortaroo/theme';
+const TUTORIAL_KEY = '@sortaroo/tutorial-seen';
 
 export const DEFAULT_ACTIONS: SortAction[] = [
   { id: 'keep', label: 'Keep', key: '1', direction: 'right', color: '#22C55E' },
@@ -47,4 +50,31 @@ export async function addHistory(record: HistoryRecord): Promise<void> {
 
 export async function clearHistory(): Promise<void> {
   await AsyncStorage.removeItem(HISTORY_KEY);
+}
+
+export async function loadThemePref(): Promise<{ name: ThemeName; mode: ThemeMode } | null> {
+  try {
+    const raw = await AsyncStorage.getItem(THEME_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export async function saveThemePref(name: ThemeName, mode: ThemeMode): Promise<void> {
+  await AsyncStorage.setItem(THEME_KEY, JSON.stringify({ name, mode }));
+}
+
+export async function hasSeenTutorial(): Promise<boolean> {
+  try {
+    const val = await AsyncStorage.getItem(TUTORIAL_KEY);
+    return val === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function markTutorialSeen(): Promise<void> {
+  await AsyncStorage.setItem(TUTORIAL_KEY, '1');
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,17 +6,14 @@ import {
   Pressable,
   FlatList,
   StyleSheet,
-  useColorScheme,
   Platform,
   Alert,
-  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { SortAction, SwipeDirection } from '../lib/types';
-import { loadActions, saveActions, DEFAULT_ACTIONS } from '../lib/storage';
-import { setAlwaysOnTop, getAlwaysOnTop } from '../lib/api';
+import { SortAction, SwipeDirection } from '../../lib/types';
+import { loadActions, saveActions, DEFAULT_ACTIONS } from '../../lib/storage';
+import { useTheme } from '../../lib/ThemeContext';
 
 const PALETTE = [
   '#EF4444',
@@ -45,23 +42,23 @@ const DIRECTION_ICON: Record<SwipeDirection, string> = {
   down: 'arrow-down',
   none: 'close',
 };
+const DIRECTION_ARROW: Record<SwipeDirection, string> = {
+  left: '\u2190',
+  right: '\u2192',
+  up: '\u2191',
+  down: '\u2193',
+  none: '',
+};
 
 const MAX_ACTIONS = 8;
 
-export default function SettingsScreen() {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+export default function SortActionsSettingsScreen() {
+  const { colors } = useTheme();
   const [actions, setActions] = useState<SortAction[]>([]);
-  const [alwaysOnTop, setAlwaysOnTopState] = useState(false);
   const listRef = useRef<FlatList<SortAction>>(null);
-  const isElectron = typeof (window as any).electronAPI !== 'undefined';
 
   useEffect(() => {
     loadActions().then(setActions);
-    // Load always-on-top setting if in Electron
-    if (isElectron) {
-      getAlwaysOnTop().then(setAlwaysOnTopState).catch(() => {});
-    }
   }, []);
 
   const updateAction = (id: string, patch: Partial<SortAction>) => {
@@ -71,7 +68,6 @@ export default function SettingsScreen() {
   };
 
   const addAction = () => {
-    // Find next unused key from '1' to '9'
     const usedKeys = new Set(actions.map((a) => a.key));
     let nextKey = '1';
     for (let i = 1; i <= 9; i++) {
@@ -82,7 +78,6 @@ export default function SettingsScreen() {
       }
     }
 
-    // Find first unused color from PALETTE
     const usedColors = new Set(actions.map((a) => a.color));
     const nextColor = PALETTE.find((c) => !usedColors.has(c)) || '#64748B';
 
@@ -97,7 +92,6 @@ export default function SettingsScreen() {
     const next = [...actions, newAction];
     setActions(next);
     saveActions(next);
-    // Scroll to the new action so the user sees it was added
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
@@ -115,7 +109,6 @@ export default function SettingsScreen() {
     };
 
     if (Platform.OS === 'web') {
-      // window.confirm is more reliable on web than Alert.alert with custom buttons
       if (window.confirm('Reset actions? This will restore the default hotkeys and swipe directions.')) {
         doReset();
       }
@@ -124,52 +117,11 @@ export default function SettingsScreen() {
 
     Alert.alert('Reset actions?', 'This will restore the default hotkeys and swipe directions.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Reset',
-        style: 'destructive',
-        onPress: doReset,
-      },
+      { text: 'Reset', style: 'destructive', onPress: doReset },
     ]);
   };
 
-  const handleToggleAlwaysOnTop = (value: boolean) => {
-    setAlwaysOnTopState(value);
-    setAlwaysOnTop(value).catch(() => {});
-  };
-
-  const renderFooter = () => {
-    if (!isElectron) return null;
-    return (
-      <View
-        style={[
-          styles.footerCard,
-          {
-            backgroundColor: isDark ? '#1e293b' : '#fff',
-          },
-        ]}
-      >
-        <View style={styles.footerRow}>
-          <View style={styles.footerInfo}>
-            <Text style={[styles.footerTitle, { color: isDark ? '#fff' : '#0f172a' }]}>
-              Stay on top
-            </Text>
-            <Text style={[styles.footerSubtitle, { color: isDark ? '#94a3b8' : '#64748b' }]}>
-              Keep window above all others
-            </Text>
-          </View>
-          <Switch
-            value={alwaysOnTop}
-            onValueChange={handleToggleAlwaysOnTop}
-            trackColor={{ false: isDark ? '#334155' : '#e2e8f0', true: '#3B82F6' }}
-            thumbColor="#fff"
-          />
-        </View>
-      </View>
-    );
-  };
-
   const renderItem = ({ item }: { item: SortAction }) => {
-    // Directions assigned to other actions (excluding 'none', which is safe to share)
     const takenDirections = new Set<SwipeDirection>();
     for (const other of actions) {
       if (other.id !== item.id && other.direction !== 'none') {
@@ -182,69 +134,67 @@ export default function SettingsScreen() {
       : null;
 
     return (
-      <View
-        style={[
-        styles.card,
-        {
-          position: 'relative',
-          backgroundColor: isDark ? '#1e293b' : '#fff',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.06,
-          shadowRadius: 8,
-          elevation: 3,
-        },
-      ]}
-    >
-      {actions.length > 1 && (
-        <Pressable
-          onPress={() => deleteAction(item.id)}
-          style={styles.deleteButton}
-          hitSlop={8}
-        >
-          <Ionicons name="trash-outline" size={16} color="#ef4444" />
-        </Pressable>
-      )}
-      <View style={styles.row}>
-        <View style={[styles.colorStrip, { backgroundColor: item.color }]} />
-        <View style={styles.fields}>
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        {actions.length > 1 && (
+          <Pressable
+            onPress={() => deleteAction(item.id)}
+            style={[styles.deleteButton, { backgroundColor: 'rgba(239,68,68,0.12)' }]}
+            hitSlop={10}
+          >
+            <Ionicons name="trash" size={18} color="#ef4444" />
+          </Pressable>
+        )}
+
+        <View style={[styles.previewRow, { borderBottomColor: colors.border }]}>
+          <View style={[styles.previewChip, { backgroundColor: item.color }]}>
+            <View style={styles.previewKeyBadge}>
+              <Text style={styles.previewKeyText}>{item.key.toUpperCase()}</Text>
+            </View>
+            <Text style={styles.previewLabel}>{item.label || 'Action'}</Text>
+            {item.direction !== 'none' && (
+              <Text style={styles.previewArrow}>{DIRECTION_ARROW[item.direction]}</Text>
+            )}
+          </View>
+          <Text style={[styles.previewHint, { color: colors.textMuted }]}>Button preview</Text>
+        </View>
+
+        <View>
           <View style={styles.fieldRow}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: isDark ? '#94a3b8' : '#64748b' }]}>Label</Text>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Label</Text>
               <TextInput
                 value={item.label}
                 onChangeText={(text) => updateAction(item.id, { label: text })}
                 style={[
                   styles.input,
-                  {
-                    color: isDark ? '#fff' : '#0f172a',
-                    backgroundColor: isDark ? '#0f172a' : '#f1f5f9',
-                  },
+                  { color: colors.text, backgroundColor: colors.surfaceHover },
                 ]}
                 maxLength={18}
               />
             </View>
             <View style={[styles.field, { width: 80 }]}>
-              <Text style={[styles.label, { color: isDark ? '#94a3b8' : '#64748b' }]}>Key</Text>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Hotkey</Text>
               <TextInput
                 value={item.key}
                 onChangeText={(text) => updateAction(item.id, { key: text.slice(-1) })}
                 style={[
                   styles.input,
                   styles.keyInput,
-                  {
-                    color: isDark ? '#fff' : '#0f172a',
-                    backgroundColor: isDark ? '#0f172a' : '#f1f5f9',
-                  },
+                  { color: colors.text, backgroundColor: colors.surfaceHover },
                 ]}
                 maxLength={1}
                 autoCapitalize="none"
               />
             </View>
           </View>
+          <Text style={[styles.fieldHint, { color: colors.textMuted }]}>
+            Press this key on your keyboard to trigger the action
+          </Text>
 
           <View style={styles.section}>
-            <Text style={[styles.label, { color: isDark ? '#94a3b8' : '#64748b' }]}>Swipe</Text>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>
+              Swipe direction to trigger
+            </Text>
             <View style={styles.directions}>
               {DIRECTIONS.map((dir) => {
                 const isTaken = dir !== 'none' && takenDirections.has(dir) && item.direction !== dir;
@@ -256,11 +206,7 @@ export default function SettingsScreen() {
                       styles.dirButton,
                       {
                         backgroundColor:
-                          item.direction === dir
-                            ? item.color
-                            : isDark
-                            ? '#0f172a'
-                            : '#f1f5f9',
+                          item.direction === dir ? item.color : colors.surfaceHover,
                         opacity: isTaken ? 0.4 : 1,
                       },
                     ]}
@@ -273,9 +219,7 @@ export default function SettingsScreen() {
                           ? '#fff'
                           : isTaken
                           ? '#ef4444'
-                          : isDark
-                          ? '#94a3b8'
-                          : '#64748b'
+                          : colors.textSecondary
                       }
                     />
                   </Pressable>
@@ -284,14 +228,13 @@ export default function SettingsScreen() {
             </View>
             {hasConflict && conflictLabel && (
               <Text style={styles.conflictWarning}>
-                ⚠️ "{conflictLabel}" already uses this swipe direction — only the first
-                match will trigger
+                "{conflictLabel}" already uses this direction. Only the first match will trigger.
               </Text>
             )}
           </View>
 
           <View style={styles.section}>
-            <Text style={[styles.label, { color: isDark ? '#94a3b8' : '#64748b' }]}>Color</Text>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Color</Text>
             <View style={styles.palette}>
               {PALETTE.map((color) => (
                 <Pressable
@@ -300,43 +243,33 @@ export default function SettingsScreen() {
                   style={[
                     styles.swatch,
                     { backgroundColor: color },
-                    item.color === color && styles.swatchActive,
+                    item.color === color && [styles.swatchActive, { borderColor: colors.accent }],
                   ]}
-                />
+                >
+                  {item.color === color && (
+                    <Ionicons name="checkmark" size={14} color="#fff" />
+                  )}
+                </Pressable>
               ))}
             </View>
           </View>
         </View>
       </View>
-    </View>
-  );
+    );
   };
 
   return (
-    <SafeAreaView
-      style={[styles.container, { backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}
-      edges={['top']}
-    >
-      <StatusBar style={isDark ? 'light' : 'dark'} />
-
-      <View style={styles.header}>
-        <View>
-          <Text style={[styles.title, { color: isDark ? '#fff' : '#0f172a' }]}>Actions</Text>
-          <Text style={[styles.subtitle, { color: isDark ? '#94a3b8' : '#64748b' }]}>
-            Customize hotkeys, colors, and swipe directions
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          {actions.length < MAX_ACTIONS && (
-            <Pressable onPress={addAction} style={styles.addButton}>
-              <Ionicons name="add" size={18} color="#3B82F6" />
-              <Text style={styles.addText}>Add</Text>
-            </Pressable>
-          )}
-          <Pressable onPress={resetDefaults} style={styles.resetButton}>
-            <Text style={styles.resetText}>Reset</Text>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['bottom']}>
+      <View style={styles.toolbar}>
+        {actions.length < MAX_ACTIONS && (
+          <Pressable onPress={addAction} style={[styles.addButton, { backgroundColor: colors.accentSoft }]}>
+            <Ionicons name="add" size={16} color={colors.accent} />
+            <Text style={[styles.addText, { color: colors.accent }]}>Add</Text>
           </Pressable>
-        </View>
+        )}
+        <Pressable onPress={resetDefaults} style={[styles.resetButton, { backgroundColor: colors.accentSoft }]}>
+          <Text style={[styles.resetText, { color: colors.accent }]}>Reset</Text>
+        </Pressable>
       </View>
 
       <FlatList
@@ -344,7 +277,6 @@ export default function SettingsScreen() {
         data={actions}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        ListFooterComponent={renderFooter}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
       />
@@ -356,31 +288,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    gap: 8,
+  },
+  addButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
+    gap: 4,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-  },
-  subtitle: {
+  addText: {
+    fontWeight: '700',
     fontSize: 14,
-    fontWeight: '500',
-    marginTop: 2,
   },
   resetButton: {
-    backgroundColor: 'rgba(148,163,184,0.15)',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
   resetText: {
-    color: '#3B82F6',
     fontWeight: '700',
     fontSize: 14,
   },
@@ -394,17 +328,64 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 14,
     position: 'relative',
+    borderWidth: 1,
   },
-  row: {
-    flexDirection: 'row',
+  deleteButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
   },
-  colorStrip: {
-    width: 6,
-    borderRadius: 3,
-    marginRight: 14,
+  previewRow: {
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  fields: {
-    flex: 1,
+  previewChip: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minWidth: 76,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  previewKeyBadge: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginBottom: 6,
+  },
+  previewKeyText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 11,
+  },
+  previewLabel: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  previewArrow: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+  },
+  previewHint: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 8,
+    letterSpacing: 0.3,
   },
   fieldRow: {
     flexDirection: 'row',
@@ -412,6 +393,11 @@ const styles = StyleSheet.create({
   },
   field: {
     flex: 1,
+  },
+  fieldHint: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 6,
   },
   label: {
     fontSize: 12,
@@ -432,7 +418,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   section: {
-    marginTop: 14,
+    marginTop: 16,
   },
   directions: {
     flexDirection: 'row',
@@ -451,16 +437,19 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   swatch: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: 'transparent',
   },
   swatchActive: {
-    borderWidth: 3,
-    borderColor: '#fff',
+    transform: [{ scale: 1.15 }],
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.3,
     shadowRadius: 4,
   },
   conflictWarning: {
@@ -469,64 +458,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 8,
     lineHeight: 18,
-  },
-  deleteButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(239,68,68,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(59,130,246,0.1)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  addText: {
-    color: '#3B82F6',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  footerCard: {
-    borderRadius: 20,
-    padding: 16,
-    marginTop: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  footerInfo: {
-    flex: 1,
-    marginRight: 16,
-  },
-  footerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  footerSubtitle: {
-    fontSize: 13,
-    fontWeight: '500',
   },
 });

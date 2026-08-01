@@ -70,6 +70,10 @@ export default function FilePreview({ file }: Props) {
 
     // ── Tier 3: Rich content preview ────────────────────────────
     const fetchTier3 = async () => {
+      if (!file.uri) {
+        if (!cancelledRef.current) setTier3Loading(false);
+        return;
+      }
       try {
         const preview = await getFilePreview(file.id);
         if (!cancelledRef.current) {
@@ -106,8 +110,10 @@ export default function FilePreview({ file }: Props) {
   // Show loading while Tier 3 is fetching and we have nothing else
   const showLoading = tier3Loading && !tier3Preview && !nativeIcon;
 
-  // Tier 3 — Image (photo, audio cover art, etc.)
+  // Tier 3 — Image (photo, audio cover art, PDF/DOCX render, etc.)
   if (tier3Type === 'image' && tier3Preview) {
+    const ext = file.extension.toLowerCase();
+    const showBadge = ext === 'pdf' || ext === 'docx';
     return (
       <View style={styles.imageContainer}>
         <Image
@@ -115,6 +121,11 @@ export default function FilePreview({ file }: Props) {
           style={styles.image}
           resizeMode="contain"
         />
+        {showBadge && (
+          <View style={styles.textFooter}>
+            <Text style={styles.textFooterLabel}>{ext.toUpperCase()} PREVIEW</Text>
+          </View>
+        )}
       </View>
     );
   }

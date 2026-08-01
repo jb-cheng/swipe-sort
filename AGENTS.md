@@ -49,7 +49,7 @@ The desktop runs an Express server that manages all state (file queue, history).
 
 | Directory / File | Role |
 |---|---|
-| `App.tsx` | Root — sets up `GestureHandlerRootView`, `SafeAreaProvider`, `NavigationContainer`, and the 3-tab navigator (Sort / History / Actions) |
+| `App.tsx` | Root — sets up `GestureHandlerRootView`, `SafeAreaProvider`, `NavigationContainer`, the 3-tab navigator (Sort / History / Settings), and renders `TutorialOverlay` when the tutorial is active |
 | `electron/main.js` | Electron main process — starts Express server on dynamic port, opens BrowserWindow, handles `pick-folder` IPC |
 | `electron/preload.js` | Context bridge exposing `window.electronAPI.pickFolder()` and `onServerPort()` |
 | `server/index.js` | Express server — file system operations (read dir, move files), REST API, serves static web build |
@@ -64,8 +64,16 @@ The desktop runs an Express server that manages all state (file queue, history).
 | `lib/types.ts` | Shared types: `FileItem` (with `uri`), `SortAction`, `SwipeDirection`, `FileType`, `HistoryRecord` |
 | `lib/fileHelpers.ts` | `FILE_META` map and `getFileTypeFromExtension()` |
 | `lib/api.ts` | Fetch-based API client (`fetchState`, `setFolder`, `sortFile`, `fetchHistory`, `resetServer`) |
-| `lib/storage.ts` | AsyncStorage helpers for actions and local history cache |
+| `lib/storage.ts` | AsyncStorage helpers for actions, local history cache, theme, and tutorial-seen flag |
+| `lib/navigation.ts` | Root/Settings param lists, `navigationRef`, `getCurrentTabName()`, `navigateToTab()` |
+| `lib/TutorialContext.tsx` | Tutorial state machine — step definitions (`TUTORIAL_STEPS`), spotlight target registry, step-completion events, confetti burst queue, finale phase |
+| `components/TutorialTarget.tsx` | Wrapper View that registers its window rect (`measureInWindow`) under a target id so the tutorial overlay can spotlight it |
+| `components/tutorial/TutorialOverlay.tsx` | In-app coach-mark overlay — dark scrim with an animated spotlight hole over the real UI, pulsing ring, coach tooltip with caret, progress dots, Skip, auto-navigation, finale fireworks |
+| `components/tutorial/SwipeHandHint.tsx` | Looping ghost-hand animation that presses and drags toward an action's swipe direction, with a destination chip |
+| `components/tutorial/KeyCapHint.tsx` | Looping keyboard-key press animation shown in tooltips on web |
+| `components/tutorial/ConfettiBurst.tsx` | One-shot particle burst (single shared value drives all particles) fired when a tutorial step is completed |
 | *(deleted — `lib/mockFile.ts` removed, no longer part of the project)* |  |
+| *(deleted — `components/TutorialDemo.tsx` replaced by the in-app `components/tutorial/` overlay system)* |  |
 
 ### File Operations
 
@@ -84,6 +92,7 @@ When the user swipes a file, the client calls `POST /api/sort` with `{ fileId, a
 - **Electron detection:** `typeof window.electronAPI !== 'undefined'` — controls whether folder picker button is shown.
 - **Animations:** All gesture work uses `react-native-reanimated` worklets/shared values — no direct state mutations during gestures.
 - **Platform checks:** `Platform.OS === 'web'` guards keyboard hotkeys. Server file ops use Node.js `fs` (not available on bare web).
+- **Tutorial:** Runs in-app over the real UI (no separate demo screen). Steps are data-driven via `TUTORIAL_STEPS`; screens wrap spotlightable elements in `TutorialTarget` and report completions with `notify()` / tab focus via `notifyScreenFocus()`. While active, SortScreen swaps in a local demo queue (no server calls, no history writes, no file opens).
 
 ## Notes
 

@@ -4,7 +4,6 @@ import {
   Text,
   Pressable,
   StyleSheet,
-  useColorScheme,
   Platform,
   ActivityIndicator,
 } from 'react-native';
@@ -15,13 +14,24 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import FileCard from '../components/FileCard';
 import ActionButtons from '../components/ActionButtons';
 import EmptyIllustration from '../components/EmptyIllustration';
+import FullscreenPreview from '../components/FullscreenPreview';
+import TutorialTarget from '../components/TutorialTarget';
 import { FileItem, SortAction, HistoryRecord } from '../lib/types';
 import { loadActions, addHistory } from '../lib/storage';
 import { pregeneratePreviews, openFile, fetchState, setFolder, sortFile, undoSort } from '../lib/api';
+import { useTheme } from '../lib/ThemeContext';
+import { useTutorial } from '../lib/TutorialContext';
+
+// Shown only while the tutorial is active: local-only files, never sent to the server.
+const DEMO_FILES: FileItem[] = [
+  { id: 'demo-1', name: 'vacation-photo', extension: 'jpg', type: 'image', size: '2.4 MB', date: 'Jul 12, 2026' },
+  { id: 'demo-2', name: 'quarterly-report', extension: 'pdf', type: 'pdf', size: '840 KB', date: 'Jul 8, 2026' },
+  { id: 'demo-3', name: 'budget-2026', extension: 'xlsx', type: 'spreadsheet', size: '156 KB', date: 'Jun 30, 2026' },
+];
 
 export default function SortScreen() {
-  const scheme = useColorScheme();
-  const isDark = scheme === 'dark';
+  const { colors, isDark } = useTheme();
+  const { active: tutorialActive, notify: notifyTutorial } = useTutorial();
 
   const [actions, setActions] = useState<SortAction[]>([]);
   const [queue, setQueue] = useState<FileItem[]>([]);
@@ -33,6 +43,13 @@ export default function SortScreen() {
   const [error, setError] = useState<string | null>(null);
   const [serverPort, setServerPort] = useState<number | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
+  const [fullscreenFile, setFullscreenFile] = useState<FileItem | null>(null);
+
+  // Tutorial demo mode: swaps in a local-only queue so the real queue,
+  // server state, and on-disk files are never touched during the tutorial.
+  const demoMode = tutorialActive;
+  const [demoQueue, setDemoQueue] = useState<FileItem[]>(DEMO_FILES);
+  const [demoUndo, setDemoUndo] = useState<FileItem[]>([]);
 
   const isElectron = typeof (window as any).electronAPI !== 'undefined';
   const queueLenRef = useRef(queue.length);
@@ -71,6 +88,16 @@ export default function SortScreen() {
     loadFromServer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reset the demo queue every time the tutorial starts
+  useEffect(() => {
+    if (demoMode) {
+      setDemoQueue(DEMO_FILES.map((f) => ({ ...f })));
+      setDemoUndo([]);
+      setSorting(false);
+      setActiveAction(null);
+    }
+  }, [demoMode]);
 
   // Poll server state every 3s ONLY when not in IPC mode (multi-device sync via Tailscale)
   useEffect(() => {
@@ -111,7 +138,9 @@ export default function SortScreen() {
     }
   };
 
-  const current = queue[0];
+  const displayedQueue = demoMode ? demoQueue : queue;
+  const current = displayedQueue[0];
+  const effectiveUndoAvailable = demoMode ? demoUndo.length > 0 : undoAvailable;
 
   const handlePickFolder = async () => {
     let pickedPath: string | null = null;
@@ -144,6 +173,18 @@ export default function SortScreen() {
   const handleSortComplete = useCallback(
     async (action: SortAction) => {
       if (!current) return;
+
+      // Tutorial: local-only sort, no server calls or history writes.
+      // Button sorts already notified at press time; only swipes notify here.
+      if (demoMode) {
+        const wasSwipe = activeAction === null;
+        setDemoUndo((prev) => [current, ...prev]);
+        setDemoQueue((prev) => prev.slice(1));
+        setSorting(false);
+        setActiveAction(null);
+        if (wasSwipe) notifyTutorial('sort');
+        return;
+      }
 
       // Track the dismissed file for cleanup
       dismissedRef.current.add(current.id);
@@ -185,10 +226,20 @@ export default function SortScreen() {
       // Pre-generate previews for the next files in the queue (lazy loading)
       pregeneratePreviews(5).catch(() => {});
     },
-    [current],
+    [current, demoMode, activeAction, notifyTutorial],
   );
 
   const handleUndo = async () => {
+    // Tutorial: local-only undo
+    if (demoMode) {
+      const last = demoUndo[0];
+      if (!last) return;
+      setDemoUndo((prev) => prev.slice(1));
+      setDemoQueue((prev) => [last, ...prev]);
+      notifyTutorial('undo');
+      return;
+    }
+
     try {
       const result = await undoSort();
       if (result.ok && result.state) {
@@ -206,8 +257,9 @@ export default function SortScreen() {
       if (sorting || !current) return;
       setSorting(true);
       setActiveAction(action);
+      if (demoMode) notifyTutorial('button-sort');
     },
-    [sorting, current],
+    [sorting, current, demoMode, notifyTutorial],
   );
 
   // ── Keyboard hotkeys (web / Electron) ──────────────────────────
@@ -219,7 +271,7 @@ export default function SortScreen() {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
 
       // 'u' for undo
-      if (e.key.toLowerCase() === 'u' && undoAvailable) {
+      if (e.key.toLowerCase() === 'u' && effectiveUndoAvailable) {
         e.preventDefault();
         handleUndo();
         return;
@@ -235,40 +287,40 @@ export default function SortScreen() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [actions, sorting, handleAction, undoAvailable, handleUndo]);
-
-  const backgroundColor = isDark ? '#0f172a' : '#f8fafc';
+  }, [actions, sorting, handleAction, effectiveUndoAvailable, handleUndo]);
 
   // ── Renderers ──────────────────────────────────────────────────
 
   const renderHeader = () => (
     <View style={styles.header}>
       <View style={{ flex: 1 }}>
-        <Text style={[styles.title, { color: isDark ? '#fff' : '#0f172a' }]}>Sort Files</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Sort Files</Text>
         {folderPath ? (
           <Text
-            style={[styles.pathText, { color: isDark ? '#94a3b8' : '#64748b' }]}
+            style={[styles.pathText, { color: colors.textSecondary }]}
             numberOfLines={1}
           >
             {folderPath}
           </Text>
         ) : (
-          <Text style={[styles.subtitle, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
             Swipe or press a key to sort
           </Text>
         )}
       </View>
       <View style={styles.badgeRow}>
-        <Pressable
-          onPress={handleUndo}
-          disabled={!undoAvailable}
-          style={[styles.undoButton, !undoAvailable && styles.undoButtonDisabled]}
-        >
-          <Ionicons name="arrow-undo" size={16} color="#3B82F6" />
-        </Pressable>
+        <TutorialTarget id="undo">
+          <Pressable
+            onPress={handleUndo}
+            disabled={!effectiveUndoAvailable}
+            style={[styles.undoButton, { backgroundColor: colors.accentSoft }, !effectiveUndoAvailable && styles.undoButtonDisabled]}
+          >
+            <Ionicons name="arrow-undo" size={16} color={colors.accent} />
+          </Pressable>
+        </TutorialTarget>
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>{queue.length}</Text>
-          <Text style={styles.badgeLabel}>left</Text>
+          <Text style={[styles.badgeText, { color: colors.accent }]}>{displayedQueue.length}</Text>
+          <Text style={[styles.badgeLabel, { color: colors.textSecondary }]}>left</Text>
         </View>
       </View>
     </View>
@@ -276,8 +328,8 @@ export default function SortScreen() {
 
   const renderLoading = () => (
     <View style={styles.center}>
-      <ActivityIndicator size="large" color="#3B82F6" />
-      <Text style={[styles.centerText, { color: isDark ? '#94a3b8' : '#64748b' }]}>
+      <ActivityIndicator size="large" color={colors.accent} />
+      <Text style={[styles.centerText, { color: colors.textSecondary }]}>
         Loading files...
       </Text>
     </View>
@@ -305,7 +357,7 @@ export default function SortScreen() {
         actions={isElectron ? [{ label: 'Pick a Folder', onPress: handlePickFolder }] : undefined}
       />
       {serverPort && (
-        <Text style={[styles.tailscaleHint, { color: isDark ? '#64748b' : '#94a3b8' }]}>
+        <Text style={[styles.tailscaleHint, { color: colors.textMuted }]}>
           Mobile access: http://localhost:{serverPort}
         </Text>
       )}
@@ -327,16 +379,25 @@ export default function SortScreen() {
   const renderCardArea = () => (
     <View style={styles.cardArea}>
       {current ? (
-        <FileCard
-          key={current.id}
-          file={current}
-          actions={actions}
-          activeAction={activeAction}
-          sorting={sorting}
-          onSortStart={() => setSorting(true)}
-          onSortComplete={handleSortComplete}
-          onTap={(f) => openFile(f.uri ?? '')}
-        />
+        <TutorialTarget id="card" style={styles.cardTarget}>
+          <FileCard
+            key={current.id}
+            file={current}
+            actions={actions}
+            activeAction={activeAction}
+            sorting={sorting}
+            onSortStart={() => setSorting(true)}
+            onSortComplete={handleSortComplete}
+            onTap={demoMode ? undefined : (f) => openFile(f.uri ?? '')}
+            onLongPress={demoMode ? undefined : (f) => setFullscreenFile(f)}
+          />
+        </TutorialTarget>
+      ) : demoMode ? (
+        <View style={styles.center}>
+          <Text style={[styles.centerText, { color: colors.textSecondary }]}>
+            Demo queue empty
+          </Text>
+        </View>
       ) : (
         renderEmptyDone()
       )}
@@ -344,19 +405,29 @@ export default function SortScreen() {
   );
 
   const renderContent = () => {
+    if (demoMode) return renderCardArea();
     if (loading) return renderLoading();
     if (error) return renderError();
     if (!folderPath) return renderNoFolder();
     return renderCardArea();
   };
 
+  const showActionButtons = demoMode
+    ? demoQueue.length > 0
+    : folderPath && queue.length > 0;
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor }]} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['top']}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       {renderHeader()}
       {renderContent()}
-      {folderPath && queue.length > 0 && (
-        <ActionButtons actions={actions} disabled={sorting || !current} onAction={handleAction} />
+      {showActionButtons && (
+        <TutorialTarget id="action-buttons">
+          <ActionButtons actions={actions} disabled={sorting || !current} onAction={handleAction} />
+        </TutorialTarget>
+      )}
+      {fullscreenFile && (
+        <FullscreenPreview file={fullscreenFile} onClose={() => setFullscreenFile(null)} />
       )}
     </SafeAreaView>
   );
@@ -385,7 +456,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: 'rgba(59,130,246,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -400,12 +470,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
-  badgeText: { fontSize: 18, fontWeight: '800', color: '#3B82F6' },
-  badgeLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  badgeText: { fontSize: 18, fontWeight: '800' },
+  badgeLabel: { fontSize: 11, fontWeight: '600' },
   cardArea: {
     flex: 1,
     marginHorizontal: 20,
     marginBottom: 16,
+  },
+  cardTarget: {
+    flex: 1,
   },
   center: {
     flex: 1,

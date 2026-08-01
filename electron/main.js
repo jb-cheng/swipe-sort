@@ -11,6 +11,37 @@ let manager;
 let previewService;
 let staticServer = null;
 let standaloneServer = null;
+let captureWindow = null;
+let captureLock = Promise.resolve();
+
+// ── DOCX visual capture (hidden BrowserWindow) ────────────────────
+
+async function getCaptureWindow() {
+  if (captureWindow && !captureWindow.isDestroyed()) return captureWindow;
+  captureWindow = new BrowserWindow({
+    width: 360,
+    height: 480,
+    show: false,
+    webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false },
+  });
+  return captureWindow;
+}
+
+async function docxRenderer(html) {
+  captureLock = captureLock.then(async () => {
+    const win = await getCaptureWindow();
+    const wrapped = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:'Segoe UI',sans-serif;font-size:13px;padding:16px;margin:0;color:#1a1a1a;background:#fff;width:320px;overflow:hidden}img{max-width:100%}</style></head><body>${html}</body></html>`;
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(wrapped));
+    await new Promise((r) => setTimeout(r, 150));
+    const image = await win.webContents.capturePage();
+    return image.toPNG();
+  }).catch((err) => {
+    console.warn('[electron] DOCX capture failed:', err.message);
+    if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
+    return null;
+  });
+  return captureLock;
+}
 
 // ── CLI flag parsing ──────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -74,7 +105,7 @@ function startStaticServer(distDir) {
 app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
   manager = new StateManager(userDataPath);
-  previewService = new PreviewService(userDataPath);
+  previewService = new PreviewService(userDataPath, { docxRenderer });
 
   // Start static file server for the built web app
   const distDir = path.join(__dirname, '..', 'dist');
@@ -317,6 +348,7 @@ ipcMain.handle('get-always-on-top', async () => {
 // ── App lifecycle ─────────────────────────────────────────────────
 
 app.on('window-all-closed', () => {
+  if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
   if (staticServer) staticServer.close();
   if (standaloneServer) standaloneServer.close();
   app.quit();

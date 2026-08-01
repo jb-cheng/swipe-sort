@@ -59,8 +59,14 @@ class ConcurrencyQueue {
 // ── Optional native dependencies (graceful fallback) ──────────────
 let sharp = null;
 let musicMetadata = null;
+let createCanvas = null;
+let mammoth = null;
+let pdfjsLib = null;
 try { sharp = require('sharp'); } catch { /* sharp unavailable — skip image resize */ }
 try { musicMetadata = require('music-metadata'); } catch { /* music-metadata unavailable — skip audio art */ }
+try { ({ createCanvas } = require('canvas')); } catch { /* canvas unavailable — skip PDF rendering */ }
+try { mammoth = require('mammoth'); } catch { /* mammoth unavailable — skip DOCX preview */ }
+try { pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js'); } catch { /* pdfjs unavailable — skip PDF rendering */ }
 
 const CACHE_DIR = 'preview-cache';
 
@@ -70,6 +76,12 @@ const THUMB_MAX_HEIGHT = 320;
 
 // Text preview character limit
 const PREVIEW_CHAR_LIMIT = 800;
+
+// PDF/DOCX rendering limits
+const PDF_RENDER_MAX_SIZE = 50 * 1024 * 1024;
+const PDF_RENDER_TIMEOUT = 10000;
+const PDF_RENDER_MAX_HEIGHT = 480;
+const DOCX_RENDER_MAX_SIZE = 50 * 1024 * 1024;
 
 // Image extensions that can be handled without sharp (raw read)
 const RAW_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
@@ -104,10 +116,13 @@ const FILE_TYPE_LABELS = {
 class PreviewService {
   /**
    * @param {string} dataDir  Directory for cache storage (e.g. app.getPath('userData')).
+   * @param {object} [options]
+   * @param {(html: string) => Promise<Buffer|null>} [options.docxRenderer]  Renders DOCX HTML to PNG (Electron capturePage).
    */
-  constructor(dataDir) {
+  constructor(dataDir, options = {}) {
     this.cacheDir = path.join(dataDir, CACHE_DIR);
     this._ensureDir(this.cacheDir);
+    this._docxRenderer = options.docxRenderer || null;
 
     // Generation queue — limit concurrent heavy operations
     this.queue = new ConcurrencyQueue(3);
@@ -456,6 +471,101 @@ class PreviewService {
     return null;
   }
 
+  /**
+   * Render page 1 of a PDF to a PNG thumbnail using pdfjs-dist + node-canvas.
+   * Returns null if rendering deps are unavailable or the file is too large/corrupt.
+   */
+  async _generatePdfPreview(filePath) {
+    if (!pdfjsLib || !createCanvas) return null;
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > PDF_RENDER_MAX_SIZE) return null;
+    } catch {
+      return null;
+    }
+
+    let pdf = null;
+    try {
+      const data = new Uint8Array(fs.readFileSync(filePath));
+      pdf = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
+
+      if (pdf.numPages === 0) return null;
+
+      const page = await pdf.getPage(1);
+      const baseViewport = page.getViewport({ scale: 1 });
+      let scale = THUMB_MAX_WIDTH / baseViewport.width;
+      if (baseViewport.height * scale > PDF_RENDER_MAX_HEIGHT) {
+        scale = PDF_RENDER_MAX_HEIGHT / baseViewport.height;
+      }
+      const viewport = page.getViewport({ scale });
+
+      const canvas = createCanvas(Math.floor(viewport.width), Math.floor(viewport.height));
+      const context = canvas.getContext('2d');
+
+      const renderTask = page.render({ canvasContext: context, viewport });
+      await Promise.race([
+        renderTask.promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PDF render timeout')), PDF_RENDER_TIMEOUT)),
+      ]);
+
+      let buffer = canvas.toBuffer('image/png');
+      let cacheExt = '.png';
+
+      if (buffer.length > 200 * 1024 && sharp) {
+        buffer = await sharp(buffer).jpeg({ quality: 80 }).toBuffer();
+        cacheExt = '.jpg';
+      }
+
+      this._cache(filePath, buffer, cacheExt);
+      return this._cachedResult(filePath);
+    } catch (err) {
+      console.warn('[preview] PDF render failed:', err.message);
+      return null;
+    } finally {
+      if (pdf) {
+        try { pdf.destroy(); } catch {}
+      }
+    }
+  }
+
+  /**
+   * Generate a DOCX preview: visual capture (Electron) or plain text (server).
+   * Returns null if mammoth is unavailable or the file is too large/corrupt.
+   */
+  async _generateDocxPreview(filePath) {
+    if (!mammoth) return null;
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > DOCX_RENDER_MAX_SIZE) return null;
+    } catch {
+      return null;
+    }
+
+    try {
+      const result = await mammoth.convertToHtml({ path: filePath });
+      const html = result.value;
+      if (!html || html.trim().length === 0) return null;
+
+      if (this._docxRenderer) {
+        const png = await this._docxRenderer(html);
+        if (png && png.length > 0) {
+          this._cache(filePath, png, '.png');
+          return this._cachedResult(filePath);
+        }
+      }
+
+      const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text.length > 0) {
+        return { contentType: 'text/plain; charset=utf-8', data: text.slice(0, PREVIEW_CHAR_LIMIT), type: 'text' };
+      }
+    } catch (err) {
+      console.warn('[preview] DOCX conversion failed:', err.message);
+    }
+    return null;
+  }
+
   _cachedResult(filePath) {
     return this._getCached(filePath);
   }
@@ -502,10 +612,18 @@ class PreviewService {
       return await this.queue.add(() => this._generateAudioPreview(filePath));
     }
 
-    // PDF text extraction
+    // PDF: rendered page thumbnail (falls back to text extraction)
     if (lowerExt === 'pdf') {
+      const rendered = await this.queue.add(() => this._generatePdfPreview(filePath));
+      if (rendered) return rendered;
       const pdfText = this._readPdfText(filePath);
       if (pdfText) return pdfText;
+    }
+
+    // DOCX: visual preview (Electron) or formatted text (server)
+    if (lowerExt === 'docx') {
+      const docxPreview = await this.queue.add(() => this._generateDocxPreview(filePath));
+      if (docxPreview) return docxPreview;
     }
 
     // CSV preview
@@ -553,18 +671,19 @@ class PreviewService {
       .filter((f) => !this._getCached(f.uri)) // only uncached
       .map((f) =>
         this.queue.add(async () => {
+          const ext = f.extension.toLowerCase();
           try {
-            await this._generateImagePreview(f.uri, f.extension);
+            if (SHARP_IMAGE_EXTS.includes(ext) || RAW_IMAGE_EXTS.includes(ext)) {
+              await this._generateImagePreview(f.uri, f.extension);
+            } else if (AUDIO_EXTS.includes(ext)) {
+              await this._generateAudioPreview(f.uri);
+            } else if (ext === 'pdf') {
+              await this._generatePdfPreview(f.uri);
+            } else if (ext === 'docx') {
+              await this._generateDocxPreview(f.uri);
+            }
           } catch {
             // silent — preview generation is best-effort
-          }
-          // Audio previews are also useful to pre-generate
-          if (AUDIO_EXTS.includes(f.extension.toLowerCase())) {
-            try {
-              await this._generateAudioPreview(f.uri);
-            } catch {
-              // silent
-            }
           }
         }),
       );
