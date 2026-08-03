@@ -86,6 +86,11 @@ export default function TutorialOverlay() {
   const [holeReady, setHoleReady] = useState(false);
   const [fireworks, setFireworks] = useState<Firework[]>([]);
 
+  // Web: the scrim is a single rounded rect with a huge box-shadow spread, so
+  // the hole corners are true border-radius cuts (one element, one paint, no
+  // translucent-overlap artifacts). Native falls back to rects + quarter disks.
+  const isWeb = Platform.OS === 'web';
+
   const rect = currentStep.targetKey ? targets[currentStep.targetKey] : undefined;
   const showHole = phase === 'steps' && !!rect;
 
@@ -203,12 +208,26 @@ export default function TutorialOverlay() {
     left: hx.value + hw.value,
     height: hh.value,
   }));
+  // Round the hole corners: clipped quarter disks sitting exactly inside each
+  // hole corner (no overlap with the scrim rects, so the translucent scrim
+  // color stays uniform and the hole matches the ring's rounded outline).
+  const cornerR = HOLE_RADIUS;
+  const tlCornerStyle = useAnimatedStyle(() => ({ left: hx.value, top: hy.value }));
+  const trCornerStyle = useAnimatedStyle(() => ({ left: hx.value + hw.value - cornerR, top: hy.value }));
+  const blCornerStyle = useAnimatedStyle(() => ({ left: hx.value, top: hy.value + hh.value - cornerR }));
+  const brCornerStyle = useAnimatedStyle(() => ({ left: hx.value + hw.value - cornerR, top: hy.value + hh.value - cornerR }));
   const ringStyle = useAnimatedStyle(() => ({
     left: hx.value,
     top: hy.value,
     width: hw.value,
     height: hh.value,
     opacity: ringPulse.value,
+  }));
+  const maskStyle = useAnimatedStyle(() => ({
+    left: hx.value,
+    top: hy.value,
+    width: hw.value,
+    height: hh.value,
   }));
 
   const demoAction = useMemo(
@@ -226,10 +245,43 @@ export default function TutorialOverlay() {
       {/* ── Scrim with spotlight hole ─────────────────────────────── */}
       {phase === 'steps' && showHole && holeReady ? (
         <>
-          <Animated.View style={[styles.scrim, styles.scimTop, topScrimStyle]} pointerEvents="auto" />
-          <Animated.View style={[styles.scrim, styles.scrimBottom, bottomScrimStyle]} pointerEvents="auto" />
-          <Animated.View style={[styles.scrim, styles.scrimLeft, leftScrimStyle]} pointerEvents="auto" />
-          <Animated.View style={[styles.scrim, styles.scrimRight, rightScrimStyle]} pointerEvents="auto" />
+          {/* Transparent click blockers: everything outside the hole eats taps.
+              On web the visual scrim is the box-shadow mask below; on native
+              these rects keep the scrim color and the corner disks round it. */}
+          <Animated.View
+            style={[isWeb ? styles.blocker : styles.scrim, styles.scimTop, topScrimStyle]}
+            pointerEvents="auto"
+          />
+          <Animated.View
+            style={[isWeb ? styles.blocker : styles.scrim, styles.scrimBottom, bottomScrimStyle]}
+            pointerEvents="auto"
+          />
+          <Animated.View
+            style={[isWeb ? styles.blocker : styles.scrim, styles.scrimLeft, leftScrimStyle]}
+            pointerEvents="auto"
+          />
+          <Animated.View
+            style={[isWeb ? styles.blocker : styles.scrim, styles.scrimRight, rightScrimStyle]}
+            pointerEvents="auto"
+          />
+          {isWeb ? (
+            <Animated.View style={[styles.holeMask, maskStyle]} pointerEvents="none" />
+          ) : (
+            <>
+              <Animated.View style={[styles.cornerClip, tlCornerStyle]} pointerEvents="none">
+                <View style={[styles.cornerDisk, styles.cornerDiskTL]} />
+              </Animated.View>
+              <Animated.View style={[styles.cornerClip, trCornerStyle]} pointerEvents="none">
+                <View style={[styles.cornerDisk, styles.cornerDiskTR]} />
+              </Animated.View>
+              <Animated.View style={[styles.cornerClip, blCornerStyle]} pointerEvents="none">
+                <View style={[styles.cornerDisk, styles.cornerDiskBL]} />
+              </Animated.View>
+              <Animated.View style={[styles.cornerClip, brCornerStyle]} pointerEvents="none">
+                <View style={[styles.cornerDisk, styles.cornerDiskBR]} />
+              </Animated.View>
+            </>
+          )}
           <Animated.View
             style={[styles.ring, { borderColor: colors.accent, shadowColor: colors.accent }, ringStyle]}
             pointerEvents="none"
@@ -259,19 +311,21 @@ export default function TutorialOverlay() {
       {/* ── Header: progress dots + skip ──────────────────────────── */}
       {phase === 'steps' && (
         <View style={[styles.header, { top: insets.top + 12 }]} pointerEvents="box-none">
-          <View style={styles.dots}>
-            {TUTORIAL_STEPS.map((s, i) => (
-              <View
-                key={s.id}
-                style={[
-                  styles.dot,
-                  {
-                    backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.35)',
-                    width: i === stepIndex ? 20 : 8,
-                  },
-                ]}
-              />
-            ))}
+          <View style={styles.dotsChip}>
+            <View style={styles.dots}>
+              {TUTORIAL_STEPS.map((s, i) => (
+                <View
+                  key={s.id}
+                  style={[
+                    styles.dot,
+                    {
+                      backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.65)',
+                      width: i === stepIndex ? 20 : 8,
+                    },
+                  ]}
+                />
+              ))}
+            </View>
           </View>
           <Pressable onPress={endTutorial} hitSlop={12} style={styles.skipButton}>
             <Text style={styles.skipText}>Skip</Text>
@@ -426,6 +480,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     backgroundColor: SCRIM_COLOR,
   },
+  blocker: {
+    position: 'absolute',
+  },
+  holeMask: {
+    position: 'absolute',
+    borderRadius: HOLE_RADIUS,
+    backgroundColor: 'transparent',
+    // One paint covers the whole screen; the element's own rounded rect is the
+    // hole. True border-radius corners, zero overlap with anything.
+    boxShadow: `0px 0px 0px 9999px ${SCRIM_COLOR}`,
+  },
   scimTop: { left: 0, right: 0, top: 0 },
   scrimBottom: { left: 0, right: 0, bottom: 0 },
   scrimLeft: { left: 0 },
@@ -443,6 +508,23 @@ const styles = StyleSheet.create({
     elevation: 6,
     zIndex: 30,
   },
+  cornerClip: {
+    position: 'absolute',
+    width: HOLE_RADIUS,
+    height: HOLE_RADIUS,
+    overflow: 'hidden',
+  },
+  cornerDisk: {
+    position: 'absolute',
+    width: HOLE_RADIUS * 2,
+    height: HOLE_RADIUS * 2,
+    borderRadius: HOLE_RADIUS,
+    backgroundColor: SCRIM_COLOR,
+  },
+  cornerDiskTL: { left: -HOLE_RADIUS, top: -HOLE_RADIUS },
+  cornerDiskTR: { left: 0, top: -HOLE_RADIUS },
+  cornerDiskBL: { left: -HOLE_RADIUS, top: 0 },
+  cornerDiskBR: { left: 0, top: 0 },
   header: {
     position: 'absolute',
     left: 0,
@@ -452,6 +534,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 24,
     zIndex: 70,
+  },
+  dotsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   dots: {
     flexDirection: 'row',

@@ -88,7 +88,7 @@ export default function SwipeHandHint({ x, y, action }: Props) {
 
       {/* The hand itself */}
       <Animated.View style={[styles.hand, handStyle]}>
-        <Ionicons name="hand-right" size={44} color="#fff" />
+        <Ionicons name="hand-right" size={40} color="#fff" />
       </Animated.View>
     </Animated.View>
   );
@@ -107,13 +107,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 48,
     height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    elevation: 8,
   },
   ring: {
     position: 'absolute',
