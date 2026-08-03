@@ -167,6 +167,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 24,
     gap: 10,
+    flexGrow: 1,
   },
   row: {
     flexDirection: 'row',
@@ -206,7 +207,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   emptyContainer: {
-    height: 400,
+    flex: 1,
     justifyContent: 'center',
   },
 });

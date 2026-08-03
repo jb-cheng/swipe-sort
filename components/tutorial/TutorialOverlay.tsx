@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Platform,
   useWindowDimensions,
+  ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets, EdgeInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -35,6 +36,9 @@ import KeyCapHint from './KeyCapHint';
 
 const SCRIM_COLOR = 'rgba(2, 6, 23, 0.93)';
 const FINALE_SCRIM = 'rgba(2, 6, 23, 0.8)';
+const TOOLTIP_BG = 'rgba(13, 20, 38, 0.92)';
+const CARET_W = 10;
+const CARET_H = 11;
 const HOLE_PADDING = 10;
 const HOLE_RADIUS = 18;
 const FINALE_DURATION = 2600;
@@ -239,6 +243,28 @@ export default function TutorialOverlay() {
   const handCenter = cardRect
     ? { x: cardRect.x + cardRect.width / 2, y: cardRect.y + cardRect.height / 2 }
     : null;
+  // The tab bar is always registered as a tab-* target, so its top edge is a
+  // reliable anchor for bottom-pinning the tooltip above it.
+  const tabBarTop = Object.entries(targets).find(([key]) => key.startsWith('tab-'))?.[1]?.y ?? null;
+
+  // Keep the Skip button clear of the spotlight hole: if the hole would
+  // cover it (e.g. the undo button in the top-right), tuck Skip in next to
+  // the progress pips instead of letting it sit on top of the target.
+  const headerTop = insets.top + 12;
+  const skipFrame = { x: winW - 24 - 72, y: headerTop, width: 72, height: 36 };
+  const hole = phase === 'steps' && showHole && rect ? padRect(rect, winW, winH) : null;
+  const skipCollides =
+    !!hole &&
+    hole.x < skipFrame.x + skipFrame.width &&
+    hole.x + hole.width > skipFrame.x &&
+    hole.y < skipFrame.y + skipFrame.height &&
+    hole.y + hole.height > skipFrame.y;
+
+  const skipButton = (
+    <Pressable onPress={endTutorial} hitSlop={12} style={styles.skipButton}>
+      <Text style={styles.skipText}>Skip</Text>
+    </Pressable>
+  );
 
   return (
     <View style={styles.root} pointerEvents="box-none">
@@ -310,26 +336,27 @@ export default function TutorialOverlay() {
 
       {/* ── Header: progress dots + skip ──────────────────────────── */}
       {phase === 'steps' && (
-        <View style={[styles.header, { top: insets.top + 12 }]} pointerEvents="box-none">
-          <View style={styles.dotsChip}>
-            <View style={styles.dots}>
-              {TUTORIAL_STEPS.map((s, i) => (
-                <View
-                  key={s.id}
-                  style={[
-                    styles.dot,
-                    {
-                      backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.9)',
-                      width: i === stepIndex ? 20 : 8,
-                    },
-                  ]}
-                />
-              ))}
+        <View style={[styles.header, { top: headerTop }]} pointerEvents="box-none">
+          <View style={styles.headerLeft}>
+            <View style={styles.dotsChip}>
+              <View style={styles.dots}>
+                {TUTORIAL_STEPS.map((s, i) => (
+                  <View
+                    key={s.id}
+                    style={[
+                      styles.dot,
+                      {
+                        backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.9)',
+                        width: i === stepIndex ? 20 : 8,
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
             </View>
+            {skipCollides && skipButton}
           </View>
-          <Pressable onPress={endTutorial} hitSlop={12} style={styles.skipButton}>
-            <Text style={styles.skipText}>Skip</Text>
-          </Pressable>
+          {!skipCollides && skipButton}
         </View>
       )}
 
@@ -340,6 +367,7 @@ export default function TutorialOverlay() {
           index={stepIndex}
           total={TUTORIAL_STEPS.length}
           rect={rect}
+          tabBarTop={tabBarTop}
           winW={winW}
           winH={winH}
           insets={insets}
@@ -371,6 +399,8 @@ interface TooltipProps {
   index: number;
   total: number;
   rect: TargetRect | undefined;
+  /** Top edge of the tab bar (null if no tab target is registered). */
+  tabBarTop: number | null;
   winW: number;
   winH: number;
   insets: EdgeInsets;
@@ -384,6 +414,7 @@ function CoachTooltip({
   index,
   total,
   rect,
+  tabBarTop,
   winW,
   winH,
   insets,
@@ -392,7 +423,11 @@ function CoachTooltip({
   onManual,
 }: TooltipProps) {
   const isWeb = Platform.OS === 'web';
-  const tooltipWidth = Math.min(340, winW - 40);
+  const tooltipWidth = Math.min(380, winW - 40);
+
+  // Measured bubble height: lets the attached-below placement pull itself
+  // up so it never clips off the bottom of the screen (or covers the card).
+  const [bubbleH, setBubbleH] = useState(0);
 
   let position: { top?: number; bottom?: number; left: number };
   let caret: 'up' | 'down' | null = null;
@@ -409,9 +444,22 @@ function CoachTooltip({
     caretX = clamp(p.x + p.width / 2 - left, 28, tooltipWidth - 28);
 
     if (huge) {
-      // Tall targets (card, lists): pin the tooltip under the header
-      position = { top: insets.top + 72, left };
-      caret = null;
+      // Tall targets: pin the bubble where it won't cover the target. If
+      // there's room below (the swipe card), attach it under the target
+      // with a caret — it may overlap dimmed content, but never the
+      // spotlighted card; near-full-height lists (history/settings) pin
+      // above the tab bar so the bubble doesn't sit on top of the very
+      // rows it explains.
+      if (spaceBelow > 120) {
+        position = { top: p.y + p.height + 14, left };
+        caret = 'up';
+      } else if (tabBarTop != null) {
+        position = { bottom: winH - tabBarTop + 14, left };
+        caret = null;
+      } else {
+        position = { top: insets.top + 72, left };
+        caret = null;
+      }
     } else if (midY < winH / 2 && spaceBelow > 170) {
       position = { top: p.y + p.height + 14, left };
       caret = 'up';
@@ -421,40 +469,92 @@ function CoachTooltip({
     }
   }
 
+  // Keep the bubble on-screen: once its height is known, pull it up if the
+  // attached-below placement would overflow past the bottom edge.
+  if (bubbleH > 0 && typeof position.top === 'number' && position.top + bubbleH > winH - 8) {
+    position = { top: winH - bubbleH - 8, left: position.left };
+  }
+
+  // Entrance: fade + slide in from the side the caret points at
+  const entrance = useSharedValue(0);
+  const slideDir = useSharedValue(1);
+  useEffect(() => {
+    slideDir.value = caret === 'down' ? -1 : 1;
+    entrance.value = 0;
+    entrance.value = withTiming(1, { duration: 340, easing: Easing.out(Easing.cubic) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.id]);
+  const animStyle = useAnimatedStyle(() => ({
+    opacity: entrance.value,
+    transform: [
+      { translateY: (1 - entrance.value) * 18 * slideDir.value },
+      { scale: 0.97 + 0.03 * entrance.value },
+    ],
+  }));
+
+  // Always-dark glass bubble: belongs to the spotlight layer in any theme.
+  // Web blurs what's behind it and glows with the accent; native uses a deep
+  // drop shadow instead.
+  const bubbleStyle: ViewStyle = {
+    backgroundColor: TOOLTIP_BG,
+    borderColor: `${colors.accent}4D`,
+    ...(isWeb
+      ? ({
+          backdropFilter: 'blur(14px)',
+          boxShadow: `0 12px 32px rgba(0,0,0,0.55), 0 0 22px ${colors.accent}40`,
+        } as ViewStyle)
+      : {
+          shadowColor: '#000',
+          shadowOpacity: 0.45,
+          shadowRadius: 24,
+          elevation: 24,
+        }),
+  };
+
+  const progressPct = ((index + 1) / total) * 100;
+
   return (
-    <View
-      style={[
-        styles.tooltip,
-        { backgroundColor: colors.surface, borderColor: colors.border, width: tooltipWidth },
-        position,
-      ]}
+    <Animated.View
+      style={[styles.tooltip, bubbleStyle, { width: tooltipWidth }, position, animStyle]}
+      onLayout={(e) => setBubbleH(e.nativeEvent.layout.height)}
       pointerEvents="auto"
     >
       {caret === 'up' && (
-        <View style={[styles.caret, styles.caretUp, { left: caretX - 8, borderBottomColor: colors.surface }]} />
+        <View
+          style={[
+            styles.caret,
+            styles.caretUp,
+            { left: caretX - CARET_W, borderBottomColor: colors.accent },
+            isWeb && { boxShadow: `0 0 10px ${colors.accent}66` },
+          ]}
+        />
       )}
       {caret === 'down' && (
-        <View style={[styles.caret, styles.caretDown, { left: caretX - 8, borderTopColor: colors.surface }]} />
+        <View
+          style={[
+            styles.caret,
+            styles.caretDown,
+            { left: caretX - CARET_W, borderTopColor: colors.accent },
+            isWeb && { boxShadow: `0 0 10px ${colors.accent}66` },
+          ]}
+        />
       )}
 
-      <Text style={[styles.stepLabel, { color: colors.accent }]}>
-        STEP {index + 1} OF {total}
-      </Text>
-      <Text style={[styles.tooltipTitle, { color: colors.text }]}>{step.title}</Text>
-      <Text style={[styles.tooltipBody, { color: colors.textSecondary }]}>{step.body}</Text>
+      <Text style={styles.tooltipTitle}>{step.title}</Text>
+      <Text style={styles.tooltipBody}>{step.body}</Text>
 
       {step.id === 'buttons' && isWeb && actions.length > 0 && (
         <View style={styles.keyRow}>
-          <Text style={[styles.keyRowText, { color: colors.textSecondary }]}>or press</Text>
+          <Text style={styles.keyRowText}>or press</Text>
           <KeyCapHint label={actions[0].key} accentColor={colors.accent} />
-          <Text style={[styles.keyRowText, { color: colors.textSecondary }]}>to sort</Text>
+          <Text style={styles.keyRowText}>to sort</Text>
         </View>
       )}
       {step.id === 'undo' && isWeb && (
         <View style={styles.keyRow}>
-          <Text style={[styles.keyRowText, { color: colors.textSecondary }]}>or press</Text>
+          <Text style={styles.keyRowText}>or press</Text>
           <KeyCapHint label="U" accentColor={colors.accent} />
-          <Text style={[styles.keyRowText, { color: colors.textSecondary }]}>to undo</Text>
+          <Text style={styles.keyRowText}>to undo</Text>
         </View>
       )}
 
@@ -464,7 +564,13 @@ function CoachTooltip({
           <Ionicons name="arrow-forward" size={16} color="#fff" />
         </Pressable>
       )}
-    </View>
+
+      {!step.actionLabel && (
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { backgroundColor: colors.accent, width: `${progressPct}%` }]} />
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
@@ -535,6 +641,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     zIndex: 70,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   dotsChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -573,41 +684,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 18,
     zIndex: 80,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.4,
-    shadowRadius: 24,
-    elevation: 24,
   },
   caret: {
     position: 'absolute',
     width: 0,
     height: 0,
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
+    borderLeftWidth: CARET_W,
+    borderRightWidth: CARET_W,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
   },
   caretUp: {
-    top: -9,
-    borderBottomWidth: 9,
+    top: -CARET_H,
+    borderBottomWidth: CARET_H,
   },
   caretDown: {
-    bottom: -9,
-    borderTopWidth: 9,
-  },
-  stepLabel: {
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1.2,
-    marginBottom: 6,
+    bottom: -CARET_H,
+    borderTopWidth: CARET_H,
   },
   tooltipTitle: {
+    color: '#fff',
     fontSize: 19,
     fontWeight: '800',
     marginBottom: 5,
   },
   tooltipBody: {
+    color: 'rgba(255,255,255,0.78)',
     fontSize: 14,
     fontWeight: '500',
     lineHeight: 21,
@@ -619,8 +721,20 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   keyRowText: {
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
     fontWeight: '600',
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginTop: 16,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
   },
   manualButton: {
     flexDirection: 'row',
@@ -631,7 +745,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 20,
     marginTop: 14,
-    alignSelf: 'flex-start',
+    alignSelf: 'stretch',
   },
   manualButtonText: {
     color: '#fff',
