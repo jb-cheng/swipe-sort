@@ -33,7 +33,7 @@ import ConfettiBurst from './ConfettiBurst';
 import SwipeHandHint from './SwipeHandHint';
 import KeyCapHint from './KeyCapHint';
 
-const SCRIM_COLOR = 'rgba(2, 6, 23, 0.86)';
+const SCRIM_COLOR = 'rgba(2, 6, 23, 0.93)';
 const FINALE_SCRIM = 'rgba(2, 6, 23, 0.8)';
 const HOLE_PADDING = 10;
 const HOLE_RADIUS = 18;
@@ -319,7 +319,7 @@ export default function TutorialOverlay() {
                   style={[
                     styles.dot,
                     {
-                      backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.65)',
+                      backgroundColor: i === stepIndex ? colors.accent : 'rgba(255,255,255,0.9)',
                       width: i === stepIndex ? 20 : 8,
                     },
                   ]}
@@ -538,9 +538,9 @@ const styles = StyleSheet.create({
   dotsChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.55)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
+    borderColor: 'rgba(255,255,255,0.35)',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -558,7 +558,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
   },
   skipText: {
     color: '#fff',
