@@ -1,7 +1,7 @@
 /**
  * Tests for lib/fileHelpers.ts
  */
-import { getFileTypeFromExtension } from '../lib/fileHelpers';
+import { getFileTypeFromExtension, sortedDestinationPath } from '../lib/fileHelpers';
 
 describe('getFileTypeFromExtension', () => {
   it('identifies image types', () => {
@@ -77,5 +77,34 @@ describe('getFileTypeFromExtension', () => {
     expect(getFileTypeFromExtension('PDF')).toBe('pdf');
     expect(getFileTypeFromExtension('Mp4')).toBe('video');
     expect(getFileTypeFromExtension('TXT')).toBe('doc');
+  });
+});
+
+describe('sortedDestinationPath', () => {
+  it('builds the destination from a Windows source path', () => {
+    expect(
+      sortedDestinationPath('C:\\Users\\me\\Downloads\\photo.jpg', 'Keep', 'photo', 'jpg'),
+    ).toBe('C:\\Users\\me\\Downloads\\Keep\\photo.jpg');
+  });
+
+  it('builds the destination from a posix source path', () => {
+    expect(sortedDestinationPath('/home/me/files/report.pdf', 'Review', 'report', 'pdf')).toBe(
+      '/home/me/files/Review/report.pdf',
+    );
+  });
+
+  it('is idempotent for paths already inside the action subfolder', () => {
+    expect(
+      sortedDestinationPath('C:\\Users\\me\\Downloads\\Keep\\photo.jpg', 'Keep', 'photo', 'jpg'),
+    ).toBe('C:\\Users\\me\\Downloads\\Keep\\photo.jpg');
+    expect(sortedDestinationPath('/home/me/files/Review/report.pdf', 'Review', 'report', 'pdf')).toBe(
+      '/home/me/files/Review/report.pdf',
+    );
+  });
+
+  it('returns null when the uri is missing or has no separator', () => {
+    expect(sortedDestinationPath(undefined, 'Keep', 'photo', 'jpg')).toBeNull();
+    expect(sortedDestinationPath('', 'Keep', 'photo', 'jpg')).toBeNull();
+    expect(sortedDestinationPath('photo.jpg', 'Keep', 'photo', 'jpg')).toBeNull();
   });
 });

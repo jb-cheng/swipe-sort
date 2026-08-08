@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -24,13 +24,14 @@ interface Props {
   onSortStart: () => void;
   onSortComplete: (action: SortAction) => void;
   onTap?: (file: FileItem) => void;
+  onDoubleTap?: (file: FileItem) => void;
   onLongPress?: (file: FileItem) => void;
 }
 
 const SWIPE_THRESHOLD = 0.22;
 const EXIT_DISTANCE = 1.35;
-const TAP_PX_THRESHOLD = 15; // px — diff below this is a tap, above is a swipe
-const DOUBLE_TAP_MS = 300; // ms window for double-tap detection
+const TAP_PX_THRESHOLD = 15; // px, diff below this is a tap, above is a swipe
+const DOUBLE_TAP_MS = 300; // ms window to wait for a second tap
 
 export default function FileCard({
   file,
@@ -40,6 +41,7 @@ export default function FileCard({
   onSortStart,
   onSortComplete,
   onTap,
+  onDoubleTap,
   onLongPress,
 }: Props) {
   const { width, height } = useWindowDimensions();
@@ -121,6 +123,41 @@ export default function FileCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeAction]);
 
+  // Single/double tap discrimination on the JS side: the first tap arms a
+  // timer, and a second tap arriving within the window upgrades it to a
+  // double tap. When no double-tap consumer exists, taps fire immediately.
+  const tapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTap = useCallback(() => {
+    if (tapTimeoutRef.current !== null) {
+      // Second tap within the window: double tap
+      clearTimeout(tapTimeoutRef.current);
+      tapTimeoutRef.current = null;
+      if (onDoubleTap) {
+        onDoubleTap(file);
+      } else {
+        onTap?.(file);
+      }
+      return;
+    }
+    if (!onDoubleTap) {
+      onTap?.(file);
+      return;
+    }
+    // First tap: wait out the window in case a second tap follows
+    tapTimeoutRef.current = setTimeout(() => {
+      tapTimeoutRef.current = null;
+      onTap?.(file);
+    }, DOUBLE_TAP_MS);
+  }, [file, onTap, onDoubleTap]);
+
+  useEffect(
+    () => () => {
+      if (tapTimeoutRef.current !== null) clearTimeout(tapTimeoutRef.current);
+    },
+    [],
+  );
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: translateX.value },
@@ -132,7 +169,6 @@ export default function FileCard({
   }));
 
   const hintDir = useSharedValue<SwipeDirection>('none');
-  const lastTapTime = useSharedValue(0);
   const longPressFired = useSharedValue(false);
 
   const panWithHints = Gesture.Pan()
@@ -164,20 +200,11 @@ export default function FileCard({
       const action = actionForDirection(dir);
       const distance = Math.max(Math.abs(dx) / thresholdX, Math.abs(dy) / thresholdY);
 
-      // Double-tap detection: fire onTap only on the second tap within 300ms
+      // Tap detection: route to the JS-side single/double tap discriminator
       const totalMovement = Math.sqrt(dx * dx + dy * dy);
-      if (totalMovement < TAP_PX_THRESHOLD && onTap && !longPressFired.value) {
-        const now = Date.now();
-        if (lastTapTime.value > 0 && now - lastTapTime.value < DOUBLE_TAP_MS) {
-          // Double-tap detected — fire callback
-          lastTapTime.value = 0;
-          animateTapFeedback();
-          runOnJS(onTap)(file);
-        } else {
-          // First tap — just record the time
-          lastTapTime.value = now;
-          animateTapFeedback();
-        }
+      if (totalMovement < TAP_PX_THRESHOLD && (onTap || onDoubleTap) && !longPressFired.value) {
+        animateTapFeedback();
+        runOnJS(handleTap)();
         resetCard();
         return;
       }

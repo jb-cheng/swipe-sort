@@ -42,12 +42,12 @@ const DIRECTION_ICON: Record<SwipeDirection, string> = {
   down: 'arrow-down',
   none: 'close',
 };
-const DIRECTION_ARROW: Record<SwipeDirection, string> = {
-  left: '\u2190',
-  right: '\u2192',
-  up: '\u2191',
-  down: '\u2193',
-  none: '',
+const DIRECTION_LABEL: Record<SwipeDirection, string> = {
+  left: 'Swipe left',
+  right: 'Swipe right',
+  up: 'Swipe up',
+  down: 'Swipe down',
+  none: 'No swipe (hotkey only)',
 };
 
 const MAX_ACTIONS = 8;
@@ -55,6 +55,9 @@ const MAX_ACTIONS = 8;
 export default function SortActionsSettingsScreen() {
   const { colors } = useTheme();
   const [actions, setActions] = useState<SortAction[]>([]);
+  // Accordion state: only one action editor is open at a time, so the list
+  // stays compact and collapsed rows have no interactive controls to misclick.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const listRef = useRef<FlatList<SortAction>>(null);
 
   useEffect(() => {
@@ -92,6 +95,7 @@ export default function SortActionsSettingsScreen() {
     const next = [...actions, newAction];
     setActions(next);
     saveActions(next);
+    setExpandedId(newAction.id);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
@@ -100,6 +104,23 @@ export default function SortActionsSettingsScreen() {
     const next = actions.filter((a) => a.id !== id);
     setActions(next);
     saveActions(next);
+    setExpandedId((cur) => (cur === id ? null : cur));
+  };
+
+  const confirmDelete = (action: SortAction) => {
+    const doDelete = () => deleteAction(action.id);
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Delete "${action.label || 'Action'}"?`)) {
+        doDelete();
+      }
+      return;
+    }
+
+    Alert.alert(`Delete "${action.label || 'Action'}"?`, 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: doDelete },
+    ]);
   };
 
   const resetDefaults = () => {
@@ -133,30 +154,53 @@ export default function SortActionsSettingsScreen() {
       ? [...actions].find((a) => a.id !== item.id && a.direction === item.direction)?.label
       : null;
 
+    const isExpanded = expandedId === item.id;
+
+    // Collapsed summary row: tap to open the editor for this action only
+    if (!isExpanded) {
+      return (
+        <Pressable
+          onPress={() => setExpandedId(item.id)}
+          style={[styles.card, styles.row, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
+          <View style={[styles.rowSwatch, { backgroundColor: item.color }]}>
+            <Text style={styles.rowKey}>{item.key.toUpperCase()}</Text>
+          </View>
+          <View style={styles.rowInfo}>
+            <Text style={[styles.rowLabel, { color: colors.text }]} numberOfLines={1}>
+              {item.label || 'Action'}
+            </Text>
+            <Text style={[styles.rowMeta, { color: colors.textMuted }]} numberOfLines={1}>
+              {DIRECTION_LABEL[item.direction]}
+            </Text>
+          </View>
+          {hasConflict && (
+            <Ionicons name="warning" size={18} color="#ef4444" style={styles.rowWarning} />
+          )}
+          <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
+        </Pressable>
+      );
+    }
+
     return (
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-        {actions.length > 1 && (
-          <Pressable
-            onPress={() => deleteAction(item.id)}
-            style={[styles.deleteButton, { backgroundColor: 'rgba(239,68,68,0.12)' }]}
-            hitSlop={10}
-          >
-            <Ionicons name="trash" size={18} color="#ef4444" />
-          </Pressable>
-        )}
-
-        <View style={[styles.previewRow, { borderBottomColor: colors.border }]}>
-          <View style={[styles.previewChip, { backgroundColor: item.color }]}>
-            <View style={styles.previewKeyBadge}>
-              <Text style={styles.previewKeyText}>{item.key.toUpperCase()}</Text>
-            </View>
-            <Text style={styles.previewLabel}>{item.label || 'Action'}</Text>
-            {item.direction !== 'none' && (
-              <Text style={styles.previewArrow}>{DIRECTION_ARROW[item.direction]}</Text>
-            )}
+        <Pressable
+          onPress={() => setExpandedId(null)}
+          style={[styles.row, styles.editorHeader, { borderBottomColor: colors.border }]}
+        >
+          <View style={[styles.rowSwatch, { backgroundColor: item.color }]}>
+            <Text style={styles.rowKey}>{item.key.toUpperCase()}</Text>
           </View>
-          <Text style={[styles.previewHint, { color: colors.textMuted }]}>Button preview</Text>
-        </View>
+          <View style={styles.rowInfo}>
+            <Text style={[styles.rowLabel, { color: colors.text }]} numberOfLines={1}>
+              {item.label || 'Action'}
+            </Text>
+            <Text style={[styles.rowMeta, { color: colors.textMuted }]} numberOfLines={1}>
+              {DIRECTION_LABEL[item.direction]}
+            </Text>
+          </View>
+          <Ionicons name="chevron-up" size={18} color={colors.textMuted} />
+        </Pressable>
 
         <View>
           <View style={styles.fieldRow}>
@@ -253,6 +297,16 @@ export default function SortActionsSettingsScreen() {
               ))}
             </View>
           </View>
+
+          {actions.length > 1 && (
+            <Pressable
+              onPress={() => confirmDelete(item)}
+              style={styles.deleteButton}
+            >
+              <Ionicons name="trash" size={16} color="#ef4444" />
+              <Text style={styles.deleteText}>Delete action</Text>
+            </Pressable>
+          )}
         </View>
       </View>
     );
@@ -330,62 +384,57 @@ const styles = StyleSheet.create({
     position: 'relative',
     borderWidth: 1,
   },
-  deleteButton: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  rowSwatch: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10,
   },
-  previewRow: {
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  previewChip: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    minWidth: 76,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  previewKeyBadge: {
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginBottom: 6,
-  },
-  previewKeyText: {
+  rowKey: {
     color: '#fff',
     fontWeight: '900',
-    fontSize: 11,
-  },
-  previewLabel: {
-    color: '#fff',
-    fontWeight: '700',
     fontSize: 14,
   },
-  previewArrow: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 13,
+  rowInfo: {
+    flex: 1,
   },
-  previewHint: {
-    fontSize: 11,
+  rowLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  rowMeta: {
+    fontSize: 12,
     fontWeight: '600',
-    marginTop: 8,
-    letterSpacing: 0.3,
+    marginTop: 2,
+  },
+  rowWarning: {
+    marginRight: 2,
+  },
+  editorHeader: {
+    paddingBottom: 14,
+    marginBottom: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 18,
+    borderRadius: 12,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(239,68,68,0.12)',
+  },
+  deleteText: {
+    color: '#ef4444',
+    fontSize: 14,
+    fontWeight: '700',
   },
   fieldRow: {
     flexDirection: 'row',

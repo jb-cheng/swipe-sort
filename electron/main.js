@@ -184,6 +184,11 @@ ipcMain.handle('open-file', async (_event, filePath) => {
   await shell.openPath(filePath);
 });
 
+/** Reveal a file in the OS file explorer (Finder on macOS). */
+ipcMain.handle('reveal-in-folder', (_event, filePath) => {
+  shell.showItemInFolder(filePath);
+});
+
 // ── IPC handlers ──────────────────────────────────────────────────
 
 /** Get the full current state. */

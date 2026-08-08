@@ -93,6 +93,7 @@ When the user swipes a file, the client calls `POST /api/sort` with `{ fileId, a
 - **Animations:** All gesture work uses `react-native-reanimated` worklets/shared values — no direct state mutations during gestures.
 - **Platform checks:** `Platform.OS === 'web'` guards keyboard hotkeys. Server file ops use Node.js `fs` (not available on bare web).
 - **Tutorial:** Runs in-app over the real UI (no separate demo screen). Steps are data-driven via `TUTORIAL_STEPS`; screens wrap spotlightable elements in `TutorialTarget` and report completions with `notify()` / tab focus via `notifyScreenFocus()`. While active, SortScreen swaps in a local demo queue (no server calls, no history writes, no file opens).
+- **Card taps:** Single click opens the file with the OS default application (`openFile`, Electron `shell.openPath`); double click reveals the file in the OS file explorer (`revealInFolder`, Electron `shell.showItemInFolder`); long press opens the in-app `FullscreenPreview`. Tap discrimination lives in `FileCard` (300ms window, JS-side timer).
 
 ## Notes
 

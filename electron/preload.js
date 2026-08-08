@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open file in OS default app
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
 
+  // Reveal file in the OS file explorer
+  revealInFolder: (filePath) => ipcRenderer.invoke('reveal-in-folder', filePath),
+
   // Window settings (stay-on-top)
   setAlwaysOnTop: (enabled) => ipcRenderer.invoke('set-always-on-top', enabled),
   getAlwaysOnTop: () => ipcRenderer.invoke('get-always-on-top'),

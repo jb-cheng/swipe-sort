@@ -11,7 +11,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
 import { HistoryRecord } from '../lib/types';
 import { loadHistory, clearHistory } from '../lib/storage';
-import { fetchHistory, clearServerHistory } from '../lib/api';
+import { fetchHistory, clearServerHistory, revealInFolder } from '../lib/api';
+import { sortedDestinationPath } from '../lib/fileHelpers';
 import { useTheme } from '../lib/ThemeContext';
 import FileIcon from '../components/FileIcon';
 import EmptyIllustration from '../components/EmptyIllustration';
@@ -54,12 +55,24 @@ export default function HistoryScreen() {
     setHistory([]);
   };
 
+  // Server history stores the post-sort path in file.uri; local AsyncStorage
+  // records keep the original path, so derive the destination for those.
+  const revealRecord = (item: HistoryRecord) => {
+    const dest =
+      sortedDestinationPath(item.file.uri, item.action.label, item.file.name, item.file.extension)
+      ?? item.file.uri
+      ?? '';
+    revealInFolder(dest);
+  };
+
   const renderItem = ({ item }: { item: HistoryRecord }) => (
-    <View
-      style={[
+    <Pressable
+      onPress={() => revealRecord(item)}
+      style={({ pressed }) => [
         styles.row,
         {
           backgroundColor: colors.surface,
+          opacity: pressed ? 0.75 : 1,
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 1 },
           shadowOpacity: 0.05,
@@ -82,7 +95,7 @@ export default function HistoryScreen() {
       <View style={[styles.badge, { backgroundColor: item.action.color }]}>
         <Text style={styles.badgeText}>{item.action.label}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 
   return (

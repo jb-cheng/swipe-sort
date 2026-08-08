@@ -18,7 +18,7 @@ import FullscreenPreview from '../components/FullscreenPreview';
 import TutorialTarget from '../components/TutorialTarget';
 import { FileItem, SortAction, HistoryRecord } from '../lib/types';
 import { loadActions, addHistory } from '../lib/storage';
-import { pregeneratePreviews, openFile, fetchState, setFolder, sortFile, undoSort } from '../lib/api';
+import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort } from '../lib/api';
 import { useTheme } from '../lib/ThemeContext';
 import { useTutorial } from '../lib/TutorialContext';
 
@@ -389,6 +389,7 @@ export default function SortScreen() {
             onSortStart={() => setSorting(true)}
             onSortComplete={handleSortComplete}
             onTap={demoMode ? undefined : (f) => openFile(f.uri ?? '')}
+            onDoubleTap={demoMode ? undefined : (f) => revealInFolder(f.uri ?? '')}
             onLongPress={demoMode ? undefined : (f) => setFullscreenFile(f)}
           />
         </TutorialTarget>

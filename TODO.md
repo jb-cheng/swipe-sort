@@ -65,9 +65,6 @@
 ## 🖥️ Phase 5: Desktop/Electron Enhancements
 
 - [ ] **macOS + Linux Electron builds** — Add `mac.target` and `linux.target` to electron-builder config alongside the existing Windows portable exe. *(Medium)*
-- [ ] **System tray / background mode** — Allow Electron to minimize to system tray and keep the IPC handlers active (or the opt-in server running) so mobile devices can still sort while the desktop window is hidden. *(Low)*
-- [ ] **Native desktop notifications** — Notify via OS notification when a sort completes or the queue is empty. *(Low)*
-- [ ] **Auto-start on login** — Optional setting to launch the Electron app on system startup. *(Low)*
 
 ## ⚙️ Phase 6: Configuration & Customization
 

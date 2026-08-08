@@ -27,3 +27,28 @@ export function getFileTypeFromExtension(ext: string): FileType {
   if (['js', 'ts', 'jsx', 'tsx', 'json', 'html', 'css', 'py'].includes(e)) return 'code';
   return 'unknown';
 }
+
+/**
+ * Compute where a file lives after being sorted into an action subfolder.
+ * Mirrors the server-side move in services/fileOps.js: the file is placed at
+ * <parent dir>/<action label>/<name>.<extension>. Uses the same path
+ * separator as the original uri. Idempotent: if the uri already points into
+ * the action subfolder (server history stores post-sort paths), it is
+ * returned unchanged. Returns null when the uri is missing.
+ */
+export function sortedDestinationPath(
+  uri: string | undefined,
+  actionLabel: string,
+  name: string,
+  extension: string,
+): string | null {
+  if (!uri) return null;
+  const sepIndex = Math.max(uri.lastIndexOf('/'), uri.lastIndexOf('\\'));
+  if (sepIndex === -1) return null;
+  const sep = uri[sepIndex];
+  const parent = uri.slice(0, sepIndex);
+  if (parent === actionLabel || parent.endsWith(`${sep}${actionLabel}`)) {
+    return uri;
+  }
+  return `${parent}${sep}${actionLabel}${sep}${name}.${extension}`;
+}

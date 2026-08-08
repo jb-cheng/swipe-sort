@@ -59,6 +59,7 @@ function getElectronAPI() {
     setAlwaysOnTop(enabled: boolean): Promise<{ ok: boolean }>;
     getAlwaysOnTop(): Promise<{ enabled: boolean }>;
     openFile(filePath: string): Promise<void>;
+    revealInFolder(filePath: string): Promise<void>;
     onServerPort(callback: (port: number | null) => void): void;
   };
 }
@@ -275,6 +276,18 @@ export async function openFile(filePath: string): Promise<void> {
   if (!isElectron() || !filePath) return;
   try {
     await getElectronAPI().openFile(filePath);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Reveal a file in the OS file explorer (Electron only).
+ */
+export async function revealInFolder(filePath: string): Promise<void> {
+  if (!isElectron() || !filePath) return;
+  try {
+    await getElectronAPI().revealInFolder(filePath);
   } catch {
     // ignore
   }
