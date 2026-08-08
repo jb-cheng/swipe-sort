@@ -6,6 +6,7 @@ const ACTIONS_KEY = '@sortaroo/actions';
 const HISTORY_KEY = '@sortaroo/history';
 const THEME_KEY = '@sortaroo/theme';
 const TUTORIAL_KEY = '@sortaroo/tutorial-seen';
+const PAIRING_TOKEN_KEY = '@sortaroo/pairing-token';
 
 export const DEFAULT_ACTIONS: SortAction[] = [
   { id: 'keep', label: 'Keep', key: '1', direction: 'right', color: '#22C55E' },
@@ -77,4 +78,18 @@ export async function hasSeenTutorial(): Promise<boolean> {
 
 export async function markTutorialSeen(): Promise<void> {
   await AsyncStorage.setItem(TUTORIAL_KEY, '1');
+}
+
+/** Load the stored mobile pairing token (captured from a scanned QR URL). */
+export async function loadPairingToken(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(PAIRING_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the mobile pairing token. */
+export async function savePairingToken(token: string): Promise<void> {
+  await AsyncStorage.setItem(PAIRING_TOKEN_KEY, token);
 }

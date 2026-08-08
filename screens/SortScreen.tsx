@@ -16,9 +16,9 @@ import ActionButtons from '../components/ActionButtons';
 import EmptyIllustration from '../components/EmptyIllustration';
 import FullscreenPreview from '../components/FullscreenPreview';
 import TutorialTarget from '../components/TutorialTarget';
-import { FileItem, SortAction, HistoryRecord } from '../lib/types';
+import { FileItem, SortAction, HistoryRecord, MobileAccessInfo } from '../lib/types';
 import { loadActions, addHistory } from '../lib/storage';
-import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort } from '../lib/api';
+import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort, getMobileAccess, onMobileAccessChanged } from '../lib/api';
 import { useTheme } from '../lib/ThemeContext';
 import { useTutorial } from '../lib/TutorialContext';
 
@@ -41,7 +41,7 @@ export default function SortScreen() {
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [serverPort, setServerPort] = useState<number | null>(null);
+  const [mobileAccessInfo, setMobileAccessInfo] = useState<MobileAccessInfo | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [fullscreenFile, setFullscreenFile] = useState<FileItem | null>(null);
 
@@ -58,12 +58,12 @@ export default function SortScreen() {
   // Track previously dismissed file IDs for cleanup
   const dismissedRef = useRef<Set<string>>(new Set());
 
-  // Listen for server port from Electron preload (only when standalone server is active)
+  // Track mobile access status from Electron (shown as a hint when enabled)
   useEffect(() => {
-    const api = (window as any).electronAPI;
-    if (api?.onServerPort) {
-      api.onServerPort((port: number | null) => setServerPort(port));
-    }
+    getMobileAccess().then((info) => {
+      if (info) setMobileAccessInfo(info);
+    });
+    onMobileAccessChanged(setMobileAccessInfo);
   }, []);
 
   // Reload actions from AsyncStorage and refresh server state every time the tab gains focus
@@ -356,9 +356,9 @@ export default function SortScreen() {
           : 'Open the desktop app to select a folder. Files will appear here automatically.'}
         actions={isElectron ? [{ label: 'Pick a Folder', onPress: handlePickFolder }] : undefined}
       />
-      {serverPort && (
+      {mobileAccessInfo?.enabled && mobileAccessInfo.url && (
         <Text style={[styles.tailscaleHint, { color: colors.textMuted }]}>
-          Mobile access: http://localhost:{serverPort}
+          Mobile access: {mobileAccessInfo.url.split('/?t=')[0]}
         </Text>
       )}
     </View>

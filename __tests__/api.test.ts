@@ -1,120 +1,49 @@
 /**
  * Tests for lib/api.ts
  *
- * Since api.ts dynamically picks IPC vs HTTP at runtime, we test each mode
- * by manipulating the environment before importing the module.
+ * All app state flows over HTTP (desktop window and phones alike), so the
+ * suite covers the fetch transport, pairing-token capture from the QR URL,
+ * and Bearer header injection. Native (Electron-only) helpers are verified
+ * to no-op gracefully outside Electron.
  */
 
-// ── Helpers to create mock environments ───────────────────────────
+// ── AsyncStorage mock ─────────────────────────────────────────────
+const mockStore: Record<string, string> = {};
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(async (key: string) => mockStore[key] ?? null),
+  setItem: jest.fn(async (key: string, value: string) => {
+    mockStore[key] = value;
+  }),
+  removeItem: jest.fn(async (key: string) => {
+    delete mockStore[key];
+  }),
+}));
 
-function withElectronAPI(mockApi: Record<string, jest.Mock>) {
-  (globalThis as any).window = { electronAPI: mockApi };
-}
-
-function withoutElectronAPI() {
-  (globalThis as any).window = undefined;
-}
-
-// Mock fetch for HTTP mode tests
+// ── Fetch mock ────────────────────────────────────────────────────
 const mockFetch = jest.fn();
 globalThis.fetch = mockFetch as any;
-
-// We use jest.isolateModules so each test file gets a fresh import
-// of api.ts.  We define the shared test data here.
 
 const SAMPLE_FILE = { id: 'f1', name: 'test', extension: 'txt', type: 'doc', size: '1 KB', date: '2025-01-01', uri: '/path/test.txt' };
 const SAMPLE_ACTION = { id: 'keep', label: 'Keep', key: '1', direction: 'right' as const, color: '#22C55E' };
 
+function plainWindow() {
+  (globalThis as any).window = undefined;
+}
+
 beforeEach(() => {
+  jest.resetModules();
   mockFetch.mockReset();
-  // Default: no Electron API
-  withoutElectronAPI();
+  Object.keys(mockStore).forEach((key) => delete mockStore[key]);
+  plainWindow();
 });
 
-describe('IPC mode (Electron)', () => {
-  let mockAPI: Record<string, jest.Mock>;
-
-  beforeEach(() => {
-    mockAPI = {
-      getState: jest.fn(),
-      setFolder: jest.fn(),
-      sortFile: jest.fn(),
-      undoSort: jest.fn(),
-      getHistory: jest.fn(),
-      getUndoStack: jest.fn(),
-      resetState: jest.fn(),
-      pickFolder: jest.fn(),
-    };
-    withElectronAPI(mockAPI);
-  });
-
-  it('fetchState calls ipc getState', async () => {
-    mockAPI.getState.mockResolvedValue({ folderPath: '/test', files: [SAMPLE_FILE], history: [], undoStack: [] });
-    const { fetchState } = await import('../lib/api');
-    const result = await fetchState();
-    expect(mockAPI.getState).toHaveBeenCalledTimes(1);
-    expect(result.folderPath).toBe('/test');
-  });
-
-  it('setFolder calls ipc setFolder', async () => {
-    mockAPI.setFolder.mockResolvedValue({ files: [SAMPLE_FILE] });
-    const { setFolder } = await import('../lib/api');
-    const result = await setFolder('/my/folder');
-    expect(mockAPI.setFolder).toHaveBeenCalledWith('/my/folder');
-    expect(result.files).toHaveLength(1);
-  });
-
-  it('sortFile calls ipc sortFile', async () => {
-    mockAPI.sortFile.mockResolvedValue({ remaining: 0 });
-    const { sortFile } = await import('../lib/api');
-    const result = await sortFile('f1', SAMPLE_ACTION);
-    expect(mockAPI.sortFile).toHaveBeenCalledWith('f1', SAMPLE_ACTION);
-    expect(result.remaining).toBe(0);
-  });
-
-  it('undoSort calls ipc undoSort', async () => {
-    mockAPI.undoSort.mockResolvedValue({ ok: true, state: { files: [SAMPLE_FILE], history: [], undoStack: [] } });
-    const { undoSort } = await import('../lib/api');
-    const result = await undoSort();
-    expect(mockAPI.undoSort).toHaveBeenCalledTimes(1);
-    expect(result.ok).toBe(true);
-  });
-
-  it('fetchHistory calls ipc getHistory', async () => {
-    mockAPI.getHistory.mockResolvedValue([{ id: 'h1', file: SAMPLE_FILE, action: SAMPLE_ACTION, timestamp: 100 }]);
-    const { fetchHistory } = await import('../lib/api');
-    const result = await fetchHistory();
-    expect(mockAPI.getHistory).toHaveBeenCalledTimes(1);
-    expect(result).toHaveLength(1);
-  });
-
-  it('resetServer calls ipc resetState', async () => {
-    mockAPI.resetState.mockResolvedValue({ ok: true });
-    const { resetServer } = await import('../lib/api');
-    await resetServer();
-    expect(mockAPI.resetState).toHaveBeenCalledTimes(1);
-  });
-
-  it('fetchUndoStack calls ipc getUndoStack', async () => {
-    mockAPI.getUndoStack.mockResolvedValue([{ id: 'u1', file: SAMPLE_FILE, action: SAMPLE_ACTION, sourcePath: '/s', destPath: '/d', timestamp: 100 }]);
-    const { fetchUndoStack } = await import('../lib/api');
-    const result = await fetchUndoStack();
-    expect(mockAPI.getUndoStack).toHaveBeenCalledTimes(1);
-    expect(result).toHaveLength(1);
-  });
-});
-
-describe('HTTP mode (browser / mobile)', () => {
-  beforeEach(() => {
-    withoutElectronAPI();
-  });
-
+describe('HTTP transport', () => {
   it('fetchState GET /api/state', async () => {
     const fakeResponse = { folderPath: null, files: [], history: [] };
     mockFetch.mockResolvedValue({ ok: true, json: async () => fakeResponse });
     const { fetchState } = await import('../lib/api');
     const result = await fetchState();
-    expect(mockFetch).toHaveBeenCalledWith('/api/state');
+    expect(mockFetch).toHaveBeenCalledWith('/api/state', expect.any(Object));
     expect(result).toEqual(fakeResponse);
   });
 
@@ -152,11 +81,11 @@ describe('HTTP mode (browser / mobile)', () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => [] });
     const { fetchHistory } = await import('../lib/api');
     await fetchHistory();
-    expect(mockFetch).toHaveBeenCalledWith('/api/history');
+    expect(mockFetch).toHaveBeenCalledWith('/api/history', expect.any(Object));
   });
 
   it('resetServer POST /api/reset', async () => {
-    mockFetch.mockResolvedValue({ ok: true });
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
     const { resetServer } = await import('../lib/api');
     await resetServer();
     expect(mockFetch).toHaveBeenCalledWith('/api/reset', expect.objectContaining({ method: 'POST' }));
@@ -166,5 +95,61 @@ describe('HTTP mode (browser / mobile)', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server error' }) });
     const { fetchState } = await import('../lib/api');
     await expect(fetchState()).rejects.toThrow('Server error: 500');
+  });
+
+  it('sends no Authorization header when no token is stored', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
+    const { resetServer } = await import('../lib/api');
+    await resetServer();
+    const init = mockFetch.mock.calls[0][1];
+    expect(init.headers).not.toHaveProperty('Authorization');
+  });
+});
+
+describe('Pairing token', () => {
+  it('attaches stored token as Bearer header', async () => {
+    mockStore['@sortaroo/pairing-token'] = 'stored-secret';
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ folderPath: null, files: [], history: [] }) });
+    const { fetchState } = await import('../lib/api');
+    await fetchState();
+    const init = mockFetch.mock.calls[0][1];
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer stored-secret' });
+  });
+
+  it('captures token from ?t= URL param, persists it, and cleans the URL', async () => {
+    const replaceState = jest.fn();
+    (globalThis as any).window = {
+      location: { search: '?t=qr-secret', pathname: '/', hash: '' },
+      history: { replaceState },
+    };
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ folderPath: null, files: [], history: [] }) });
+
+    const { fetchState } = await import('../lib/api');
+    await fetchState();
+
+    // Token persisted for future sessions
+    expect(mockStore['@sortaroo/pairing-token']).toBe('qr-secret');
+    // Address bar cleaned
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/');
+    // Request authenticated
+    const init = mockFetch.mock.calls[0][1];
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer qr-secret' });
+  });
+});
+
+describe('Native helpers outside Electron', () => {
+  it('getMobileAccess returns null', async () => {
+    const { getMobileAccess } = await import('../lib/api');
+    await expect(getMobileAccess()).resolves.toBeNull();
+  });
+
+  it('getNativeIcon returns null', async () => {
+    const { getNativeIcon } = await import('../lib/api');
+    await expect(getNativeIcon('/some/file')).resolves.toBeNull();
+  });
+
+  it('openFile is a no-op', async () => {
+    const { openFile } = await import('../lib/api');
+    await expect(openFile('/some/file')).resolves.toBeUndefined();
   });
 });

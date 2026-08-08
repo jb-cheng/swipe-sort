@@ -6,6 +6,7 @@ export type SettingsStackParamList = {
   AppearanceSettings: undefined;
   SortActionsSettings: undefined;
   WindowSettings: undefined;
+  MobileAccessSettings: undefined;
   HelpSettings: undefined;
 };
 

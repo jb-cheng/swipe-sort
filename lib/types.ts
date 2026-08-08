@@ -45,3 +45,13 @@ export interface UndoRecord {
   destPath: string;
   timestamp: number;
 }
+
+/** Mobile (LAN) remote-control status reported by the desktop app. */
+export interface MobileAccessInfo {
+  enabled: boolean;
+  port: number | null;
+  lanIp: string | null;
+  /** Full pairing URL including the token query param (?t=...), or null. */
+  url: string | null;
+  token: string;
+}

@@ -14,7 +14,9 @@
  */
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { StateManager } = require('../services/StateManager');
 const { scanFolder, readFilePreview } = require('../services/fileOps');
 const { PreviewService } = require('../services/previewService');
@@ -36,17 +38,63 @@ const MIME = {
   '.map': 'application/json',
 };
 
+// ── Authorization ─────────────────────────────────────────────────
+
+/** Normalize a socket remote address for loopback detection. */
+function isLoopbackAddress(remoteAddress) {
+  if (!remoteAddress) return false;
+  const addr = remoteAddress.toLowerCase();
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
+/**
+ * Decide whether an API request is authorized.
+ *
+ * Loopback requests (the desktop window itself) are always trusted.
+ * Remote requests must present the pairing token as a Bearer token.
+ * When no token is configured, all requests are allowed (dev mode).
+ */
+function authorizeRequest(remoteAddress, authHeader, token) {
+  if (isLoopbackAddress(remoteAddress)) return true;
+  if (!token) return true;
+  if (typeof authHeader !== 'string') return false;
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  if (!match) return false;
+  const presented = Buffer.from(match[1]);
+  const expected = Buffer.from(token);
+  if (presented.length !== expected.length) return false;
+  return crypto.timingSafeEqual(presented, expected);
+}
+
+/** Find the first non-internal IPv4 address (LAN IP) for CLI output. */
+function findLanIPv4() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Create the standalone HTTP server.
  *
  * @param {string} projectDir  Root directory (for serving dist/ static files).
  * @param {object} [options]
  * @param {string} [options.dataDir]  Directory for state persistence.
+ * @param {string|null} [options.token]  Pairing token required for remote
+ *   (non-loopback) API requests. Null/undefined disables token auth.
+ * @param {Function} [options.docxRenderer]  Optional DOCX-to-image renderer
+ *   (provided by Electron for rich document previews).
  */
 function createServer(projectDir, options = {}) {
   const dataDir = options.dataDir || projectDir;
+  let token = options.token || null;
   const manager = new StateManager(dataDir);
-  const previewService = new PreviewService(dataDir);
+  const previewService = new PreviewService(dataDir, { docxRenderer: options.docxRenderer });
   const distDir = path.join(projectDir, 'dist');
 
   const server = http.createServer((req, res) => {
@@ -75,6 +123,14 @@ function createServer(projectDir, options = {}) {
     const pathname = url.pathname;
 
     try {
+      // ── Authorization gate for all API routes ───────────────────
+      if (pathname.startsWith('/api/')) {
+        if (!authorizeRequest(req.socket.remoteAddress, req.headers.authorization, token)) {
+          respondJson(res, 401, { error: 'Invalid or missing pairing token' });
+          return;
+        }
+      }
+
       // ── API routes ────────────────────────────────────────────
       if (pathname === '/api/state' && req.method === 'GET') {
         respondJson(res, 200, manager.getState());
@@ -208,6 +264,11 @@ function createServer(projectDir, options = {}) {
     }
   }
 
+  /** Update the pairing token at runtime (used by Electron on token reset). */
+  server.setToken = (newToken) => {
+    token = newToken || null;
+  };
+
   return server;
 }
 
@@ -232,13 +293,23 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const portIdx = args.indexOf('--port');
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1], 10) : 3456;
+  const tokenIdx = args.indexOf('--token');
+  const token = tokenIdx !== -1 && args[tokenIdx + 1]
+    ? args[tokenIdx + 1]
+    : crypto.randomBytes(32).toString('hex');
   const dataDir = process.env.FILE_SORTER_DATA_DIR || __dirname;
 
-  const server = createServer(path.join(__dirname, '..'), { dataDir });
+  const server = createServer(path.join(__dirname, '..'), { dataDir, token });
   server.listen(port, () => {
     console.log(`[standalone] File Sorter server on http://localhost:${port}`);
     console.log(`[standalone] Data directory: ${dataDir}`);
+    const lanIp = findLanIPv4();
+    if (lanIp) {
+      console.log(`[standalone] Mobile access: http://${lanIp}:${port}/?t=${token}`);
+    } else {
+      console.log(`[standalone] Pairing token (append as ?t=...): ${token}`);
+    }
   });
 }
 
-module.exports = { createServer };
+module.exports = { createServer, authorizeRequest, isLoopbackAddress };
