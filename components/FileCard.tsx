@@ -21,6 +21,8 @@ interface Props {
   actions: SortAction[];
   activeAction: SortAction | null;
   sorting: boolean;
+  /** Read-only mode: swipe-to-sort is disabled (remote control active). */
+  locked?: boolean;
   onSortStart: () => void;
   onSortComplete: (action: SortAction) => void;
   onTap?: (file: FileItem) => void;
@@ -38,6 +40,7 @@ export default function FileCard({
   actions,
   activeAction,
   sorting,
+  locked = false,
   onSortStart,
   onSortComplete,
   onTap,
@@ -172,7 +175,7 @@ export default function FileCard({
   const longPressFired = useSharedValue(false);
 
   const panWithHints = Gesture.Pan()
-    .enabled(!sorting)
+    .enabled(!sorting && !locked)
     .onBegin((e) => {
       longPressFired.value = false;
       scale.value = withTiming(1.02, { duration: 120 });

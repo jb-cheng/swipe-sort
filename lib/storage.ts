@@ -53,6 +53,15 @@ export async function clearHistory(): Promise<void> {
   await AsyncStorage.removeItem(HISTORY_KEY);
 }
 
+/** Remove a single cached history record by id (after a per-item undo). */
+export async function removeHistoryRecord(historyId: string): Promise<void> {
+  const history = await loadHistory();
+  const next = history.filter((h) => h.id !== historyId);
+  if (next.length !== history.length) {
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  }
+}
+
 export async function loadThemePref(): Promise<{ name: ThemeName; mode: ThemeMode } | null> {
   try {
     const raw = await AsyncStorage.getItem(THEME_KEY);

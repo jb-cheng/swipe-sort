@@ -23,6 +23,7 @@ release/
 # IDE / editor
 .vscode/
 .idea/
+.qoder/
 *.swp
 *.swo
 *~

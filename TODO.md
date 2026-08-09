@@ -88,3 +88,14 @@
 | **High** | 1 | Mobile folder picker |
 | **Medium** | 6 | Mobile layout, macOS/Linux builds, Config UI, Custom keys, Dead code, Pagination |
 | **Low** | 7 | Expo Router, Tray mode, Notifications, Auto-start, Migration system, Branding, Lazy loading |
+
+
+- allow for undoing of stuff in the history tab, which brings it to the top of the queue on the sort tab
+
+- mobile access setting "control your desktop from this phone" in the remote-control does not work and should not work but it currently appears in the settings even though it should not
+
+- add a button/feature that allows users to re-select the folder as it currently does not look like there is one
+
+- find example pictures/files for the tutorial
+
+- add notes in the tutorial on how double clicking (on desktop) will open in file explorer, single click will open it, and holding on it will make preview larger if available (only for docs and pdfs)

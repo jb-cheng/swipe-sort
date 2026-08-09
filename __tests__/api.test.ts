@@ -77,6 +77,17 @@ describe('HTTP transport', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('undoHistoryItem POST /api/history/undo with the history id', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, state: {} }) });
+    const { undoHistoryItem } = await import('../lib/api');
+    const result = await undoHistoryItem('h-123');
+    expect(mockFetch).toHaveBeenCalledWith('/api/history/undo', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ historyId: 'h-123' }),
+    }));
+    expect(result.ok).toBe(true);
+  });
+
   it('fetchHistory GET /api/history', async () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => [] });
     const { fetchHistory } = await import('../lib/api');
@@ -137,12 +148,40 @@ describe('Pairing token', () => {
   });
 });
 
-describe('Native helpers outside Electron', () => {
-  it('getMobileAccess returns null', async () => {
+describe('Mobile access outside Electron (phone)', () => {
+  it('getMobileAccess GET /api/mobile-access and maps the response', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ enabled: true }) });
+    const { getMobileAccess } = await import('../lib/api');
+    const result = await getMobileAccess();
+    expect(mockFetch).toHaveBeenCalledWith('/api/mobile-access', expect.any(Object));
+    expect(result).toEqual({ enabled: true, port: null, lanIp: null, url: null });
+  });
+
+  it('getMobileAccess returns null when the server is unreachable', async () => {
+    mockFetch.mockRejectedValue(new Error('network down'));
     const { getMobileAccess } = await import('../lib/api');
     await expect(getMobileAccess()).resolves.toBeNull();
   });
 
+  it('setMobileAccessEnabled POST /api/mobile-access/enabled', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, enabled: false }) });
+    const { setMobileAccessEnabled } = await import('../lib/api');
+    const result = await setMobileAccessEnabled(false);
+    expect(mockFetch).toHaveBeenCalledWith('/api/mobile-access/enabled', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ enabled: false }),
+    }));
+    expect(result).toEqual({ enabled: false, port: null, lanIp: null, url: null });
+  });
+
+  it('setMobileAccessEnabled returns null when the server rejects', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 501, json: async () => ({ error: 'Unsupported' }) });
+    const { setMobileAccessEnabled } = await import('../lib/api');
+    await expect(setMobileAccessEnabled(false)).resolves.toBeNull();
+  });
+});
+
+describe('Native helpers outside Electron', () => {
   it('getNativeIcon returns null', async () => {
     const { getNativeIcon } = await import('../lib/api');
     await expect(getNativeIcon('/some/file')).resolves.toBeNull();

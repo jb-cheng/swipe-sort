@@ -64,6 +64,7 @@ The desktop embeds one HTTP server (`server/standalone.js`) that manages all sta
 | `lib/types.ts` | Shared types: `FileItem` (with `uri`), `SortAction`, `SwipeDirection`, `FileType`, `HistoryRecord` |
 | `lib/fileHelpers.ts` | `FILE_META` map and `getFileTypeFromExtension()` |
 | `lib/api.ts` | HTTP API client (`fetchState`, `setFolder`, `sortFile`, ...), pairing-token capture/injection; native helpers via IPC |
+| `lib/demoFiles.ts` | Tutorial demo queue: bundled example files (`assets/demo/`) with local preview assets, never sent to the server |
 | `lib/storage.ts` | AsyncStorage helpers for actions, local history cache, theme, tutorial-seen flag, and pairing token |
 | `lib/navigation.ts` | Root/Settings param lists, `navigationRef`, `getCurrentTabName()`, `navigateToTab()` |
 | `lib/TutorialContext.tsx` | Tutorial state machine — step definitions (`TUTORIAL_STEPS`), spotlight target registry, step-completion events, confetti burst queue, finale phase |
@@ -82,6 +83,10 @@ When the user swipes a file, the client calls `POST /api/sort` with `{ fileId, a
 2. Moves the file via `fs.renameSync()` into that subfolder
 3. Removes it from the queue and adds a history record
 
+Undo comes in two flavors:
+- `POST /api/undo` undoes the last sort (LIFO, also bound to the `U` hotkey and the undo button on the Sort tab).
+- `POST /api/history/undo` with `{ historyId }` undoes a specific History-tab entry: the file moves back to its original location and is re-queued at the top of the Sort tab. The server rejects it when the entry is unknown, its undo record was consumed, the active folder has changed, or the file no longer exists on disk.
+
 ## Conventions
 
 - **Naming:** Components/screens PascalCase, lib files camelCase, server/electron files kebab-case.
@@ -92,7 +97,7 @@ When the user swipes a file, the client calls `POST /api/sort` with `{ fileId, a
 - **Electron detection:** `typeof window.electronAPI !== 'undefined'` — controls whether folder picker button is shown.
 - **Animations:** All gesture work uses `react-native-reanimated` worklets/shared values — no direct state mutations during gestures.
 - **Platform checks:** `Platform.OS === 'web'` guards keyboard hotkeys. Server file ops use Node.js `fs` (not available on bare web).
-- **Tutorial:** Runs in-app over the real UI (no separate demo screen). Steps are data-driven via `TUTORIAL_STEPS`; screens wrap spotlightable elements in `TutorialTarget` and report completions with `notify()` / tab focus via `notifyScreenFocus()`. While active, SortScreen swaps in a local demo queue (no server calls, no history writes, no file opens).
+- **Tutorial:** Runs in-app over the real UI (no separate demo screen). Steps are data-driven via `TUTORIAL_STEPS`; screens wrap spotlightable elements in `TutorialTarget` and report completions with `notify()` / tab focus via `notifyScreenFocus()`. While active, SortScreen swaps in a local demo queue (no server calls, no history writes, no file opens) whose example files and previews are bundled in `assets/demo/` via `lib/demoFiles.ts`.
 - **Card taps:** Single click opens the file with the OS default application (`openFile`, Electron `shell.openPath`); double click reveals the file in the OS file explorer (`revealInFolder`, Electron `shell.showItemInFolder`); long press opens the in-app `FullscreenPreview`. Tap discrimination lives in `FileCard` (300ms window, JS-side timer).
 
 ## Notes

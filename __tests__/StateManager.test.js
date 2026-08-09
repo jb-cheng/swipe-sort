@@ -153,6 +153,83 @@ describe('StateManager', () => {
     expect(() => mgr.undoLastSort()).toThrow();
   });
 
+  // ── undoHistoryItem (per-item undo) ────────────────────────
+
+  test('undoHistoryItem restores the matching file to the front of the queue', () => {
+    const files = [makeFile('a', 'txt'), makeFile('b', 'txt')];
+    fs.writeFileSync(path.join(tmpdir, 'a.txt'), 'a');
+    fs.writeFileSync(path.join(tmpdir, 'b.txt'), 'b');
+    mgr.setFolder(tmpdir, files);
+
+    // Sort both files (a first, b second)
+    mgr.executeSort(mgr.getState().files[0], { id: 'k', label: 'Keep' });
+    mgr.executeSort(mgr.getState().files[0], { id: 'r', label: 'Review' });
+    expect(mgr.getState().files.length).toBe(0);
+    expect(mgr.getState().history.length).toBe(2);
+
+    // Undo the FIRST sorted file (not the last one)
+    const entryA = mgr.getState().history.find((h) => h.file.name === 'a');
+    const undone = mgr.undoHistoryItem(entryA.id);
+    expect(undone.sourcePath).toBe(path.join(tmpdir, 'a.txt'));
+
+    const state = mgr.getState();
+    // Restored file is at the top of the queue with its original uri
+    expect(state.files.length).toBe(1);
+    expect(state.files[0].name).toBe('a');
+    expect(state.files[0].uri).toBe(path.join(tmpdir, 'a.txt'));
+    // Only the matching history and undo entries were removed
+    expect(state.history.length).toBe(1);
+    expect(state.history[0].file.name).toBe('b');
+    expect(state.undoStack.length).toBe(1);
+    // File moved back on disk
+    expect(fs.existsSync(path.join(tmpdir, 'a.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpdir, 'Keep', 'a.txt'))).toBe(false);
+  });
+
+  test('undoHistoryItem throws for an unknown history id', () => {
+    mgr.setFolder(tmpdir, [makeFile('test', 'txt')]);
+    mgr.executeSort(mgr.getState().files[0], { id: 'k', label: 'Keep' });
+    expect(() => mgr.undoHistoryItem('does-not-exist')).toThrow('History entry not found');
+  });
+
+  test('undoHistoryItem throws when the undo record was already consumed', () => {
+    mgr.setFolder(tmpdir, [makeFile('test', 'txt')]);
+    mgr.executeSort(mgr.getState().files[0], { id: 'k', label: 'Keep' });
+
+    const historyId = mgr.getState().history[0].id;
+    // Simulate the undo record being consumed elsewhere while the history
+    // entry lingers (e.g. hand-edited state file).
+    mgr.state.undoStack = [];
+
+    expect(() => mgr.undoHistoryItem(historyId)).toThrow('can no longer be undone');
+    // Nothing was moved or re-queued
+    expect(mgr.getState().files.length).toBe(0);
+    expect(mgr.getState().history.length).toBe(1);
+  });
+
+  test('undoHistoryItem throws when a different folder is now active', () => {
+    mgr.setFolder(tmpdir, [makeFile('test', 'txt')]);
+    mgr.executeSort(mgr.getState().files[0], { id: 'k', label: 'Keep' });
+
+    const historyId = mgr.getState().history[0].id;
+    // Simulate a folder switch without clearing history
+    mgr.state.folderPath = path.join(tmpdir, 'elsewhere');
+
+    expect(() => mgr.undoHistoryItem(historyId)).toThrow('different folder');
+    // File stays where it was sorted
+    expect(fs.existsSync(path.join(tmpdir, 'Keep', 'test.txt'))).toBe(true);
+  });
+
+  test('undoHistoryItem throws if the sorted file was externally deleted', () => {
+    mgr.setFolder(tmpdir, [makeFile('test', 'txt')]);
+    mgr.executeSort(mgr.getState().files[0], { id: 'k', label: 'Keep' });
+
+    const entry = mgr.getState().history[0];
+    fs.unlinkSync(entry.file.uri);
+
+    expect(() => mgr.undoHistoryItem(entry.id)).toThrow();
+  });
+
   // ── State persistence ──────────────────────────────────────────
 
   test('persists state to disk and reloads it', () => {

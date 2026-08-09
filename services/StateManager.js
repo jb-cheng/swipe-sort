@@ -144,6 +144,51 @@ class StateManager {
       : null;
   }
 
+  /**
+   * Undo a specific history entry by id (per-item undo from the History tab).
+   *
+   * Moves the file back to its original location and re-queues it at the
+   * front of the queue. Throws if the entry is unknown, its undo record was
+   * already consumed, the folder has since changed, or the file is gone.
+   *
+   * @param {string} historyId  Id of the history record to undo.
+   * @returns {object} The undo record that was applied.
+   */
+  undoHistoryItem(historyId) {
+    const histIdx = this.state.history.findIndex((h) => h.id === historyId);
+    if (histIdx === -1) {
+      throw new Error('History entry not found');
+    }
+    const record = this.state.history[histIdx];
+
+    // The undo record is matched by destination path: history stores the
+    // post-sort path in file.uri.
+    const undoIdx = this.state.undoStack.findIndex((u) => u.destPath === record.file.uri);
+    if (undoIdx === -1) {
+      throw new Error('This entry can no longer be undone');
+    }
+    const undoRecord = this.state.undoStack[undoIdx];
+
+    // A restored file only belongs to the queue of the folder it was sorted
+    // from. Refuse if the user has since switched folders (or cleared them).
+    if (!this.state.folderPath || path.dirname(undoRecord.sourcePath) !== this.state.folderPath) {
+      throw new Error('Cannot undo: a different folder is now active');
+    }
+
+    // Move the file back on disk (throws if it was moved/deleted externally)
+    execUndo(undoRecord);
+
+    this.state.undoStack.splice(undoIdx, 1);
+    this.state.history.splice(histIdx, 1);
+
+    // Re-add the file to the front of the queue with its original URI
+    const restoredFile = { ...undoRecord.file, uri: undoRecord.sourcePath };
+    this.state.files.unshift(restoredFile);
+
+    this._save();
+    return undoRecord;
+  }
+
   /** Return a copy of the undo stack. */
   getUndoStack() {
     return [...this.state.undoStack];

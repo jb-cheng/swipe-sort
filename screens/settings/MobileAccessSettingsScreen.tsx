@@ -17,17 +17,20 @@ import {
   setMobileAccessEnabled,
   resetMobileToken,
   onMobileAccessChanged,
+  isElectron,
 } from '../../lib/api';
 
 export default function MobileAccessSettingsScreen() {
   const { colors } = useTheme();
   const [info, setInfo] = useState<MobileAccessInfo | null>(null);
   const [busy, setBusy] = useState(false);
+  const onDesktop = isElectron();
 
   useEffect(() => {
+    if (!onDesktop) return;
     getMobileAccess().then(setInfo).catch(() => {});
     onMobileAccessChanged(setInfo);
-  }, []);
+  }, [onDesktop]);
 
   const handleToggle = async (value: boolean) => {
     setBusy(true);
@@ -45,6 +48,10 @@ export default function MobileAccessSettingsScreen() {
 
   const enabled = info?.enabled === true;
   const displayUrl = info?.url ? info.url.split('/?t=')[0] : null;
+
+  // Desktop-only screen: phones control remote access by being paired or
+  // unpaired from the desktop, so this UI never renders on a remote.
+  if (!onDesktop) return null;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['bottom']}>

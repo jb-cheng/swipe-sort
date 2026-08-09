@@ -80,6 +80,24 @@ function findLanIPv4() {
 }
 
 /**
+ * Cache policy for static assets.
+ *
+ * index.html must never be cached: it is the only pointer to the current
+ * content-hashed JS bundle, and a stale copy pins phones to an old build
+ * (they would miss updates such as the disconnected screen forever).
+ * Hashed assets under /_expo/ are immutable and safe to cache aggressively.
+ */
+function cacheControlFor(pathname) {
+  if (pathname === '/' || pathname === '' || pathname.endsWith('.html')) {
+    return 'no-store';
+  }
+  if (pathname.startsWith('/_expo/')) {
+    return 'public, max-age=31536000, immutable';
+  }
+  return 'no-cache';
+}
+
+/**
  * Create the standalone HTTP server.
  *
  * @param {string} projectDir  Root directory (for serving dist/ static files).
@@ -89,6 +107,10 @@ function findLanIPv4() {
  *   (non-loopback) API requests. Null/undefined disables token auth.
  * @param {Function} [options.docxRenderer]  Optional DOCX-to-image renderer
  *   (provided by Electron for rich document previews).
+ * @param {Function} [options.isMobileAccessEnabled]  Getter returning whether
+ *   mobile (LAN) access is currently enabled. Used by GET /api/mobile-access.
+ * @param {Function} [options.onMobileAccessToggle]  Handler invoked when a
+ *   client requests a mobile-access toggle via POST /api/mobile-access/enabled.
  */
 function createServer(projectDir, options = {}) {
   const dataDir = options.dataDir || projectDir;
@@ -111,7 +133,7 @@ function createServer(projectDir, options = {}) {
     // CORS headers for local development
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -156,7 +178,11 @@ function createServer(projectDir, options = {}) {
         const file = state.files.find((f) => f.id === fileId);
         if (!file) return respondJson(res, 404, { error: 'File not found in queue' });
         manager.executeSort(file, action);
-        respondJson(res, 200, { remaining: manager.getState().files.length, history: manager.getState().history.length });
+        respondJson(res, 200, {
+          remaining: manager.getState().files.length,
+          history: manager.getState().history.length,
+          undoStackLength: manager.getUndoStack().length,
+        });
         return;
       }
 
@@ -164,6 +190,21 @@ function createServer(projectDir, options = {}) {
         const record = manager.undoLastSort();
         if (!record) return respondJson(res, 400, { error: 'Nothing to undo' });
         respondJson(res, 200, { ok: true, undoRecord: record, state: manager.getState() });
+        return;
+      }
+
+      // Undo a specific history entry (per-item undo from the History tab).
+      // The file moves back to its original location and to the top of the queue.
+      if (pathname === '/api/history/undo' && req.method === 'POST') {
+        const body = await readBody(req);
+        const { historyId } = JSON.parse(body);
+        if (!historyId) return respondJson(res, 400, { error: 'historyId is required' });
+        try {
+          const record = manager.undoHistoryItem(historyId);
+          respondJson(res, 200, { ok: true, undoRecord: record, state: manager.getState() });
+        } catch (err) {
+          respondJson(res, 400, { error: err.message });
+        }
         return;
       }
 
@@ -186,6 +227,32 @@ function createServer(projectDir, options = {}) {
       if (pathname === '/api/reset' && req.method === 'POST') {
         manager.reset();
         respondJson(res, 200, { ok: true });
+        return;
+      }
+
+      // ── API: mobile access status and remote toggle ──────────
+      // Lets a paired phone disable (or re-enable) remote control, so the
+      // lock can be released from either platform.
+      if (pathname === '/api/mobile-access' && req.method === 'GET') {
+        const enabled = typeof options.isMobileAccessEnabled === 'function'
+          ? !!options.isMobileAccessEnabled()
+          : false;
+        respondJson(res, 200, { enabled });
+        return;
+      }
+
+      if (pathname === '/api/mobile-access/enabled' && req.method === 'POST') {
+        const body = await readBody(req);
+        const { enabled } = JSON.parse(body);
+        if (typeof enabled !== 'boolean') {
+          return respondJson(res, 400, { error: 'enabled must be a boolean' });
+        }
+        if (typeof options.onMobileAccessToggle !== 'function') {
+          return respondJson(res, 501, { error: 'Mobile access toggle not supported in this mode' });
+        }
+        // Respond before the host re-binds: disabling closes this connection.
+        respondJson(res, 200, { ok: true, enabled });
+        setTimeout(() => options.onMobileAccessToggle(enabled), 100);
         return;
       }
 
@@ -239,7 +306,10 @@ function createServer(projectDir, options = {}) {
           const ext = path.extname(filePath).toLowerCase();
           const contentType = MIME[ext] || 'application/octet-stream';
           const content = fs.readFileSync(filePath);
-          res.writeHead(200, { 'Content-Type': contentType });
+          res.writeHead(200, {
+            'Content-Type': contentType,
+            'Cache-Control': cacheControlFor(pathname),
+          });
           res.end(content);
           return;
         }
@@ -248,7 +318,10 @@ function createServer(projectDir, options = {}) {
         const indexHtml = path.join(distDir, 'index.html');
         if (fs.existsSync(indexHtml)) {
           const content = fs.readFileSync(indexHtml);
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',
+          });
           res.end(content);
           return;
         }

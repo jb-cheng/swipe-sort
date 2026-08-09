@@ -124,6 +124,23 @@ function broadcastMobileAccess() {
   }
 }
 
+/**
+ * Enable or disable mobile (LAN) access. Single entry point used by both
+ * the desktop IPC handler and the paired phone's HTTP toggle request.
+ * Re-binds the server only when the flag actually changes.
+ */
+async function applyMobileAccessEnabled(enabled) {
+  const next = enabled === true;
+  const changed = mobileConfig.enabled !== next;
+  mobileConfig.enabled = next;
+  mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
+  if (changed) {
+    await restartServer();
+  }
+  broadcastMobileAccess();
+  return getMobileAccessInfo();
+}
+
 // ── App ready ─────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
@@ -134,6 +151,14 @@ app.whenReady().then(async () => {
     dataDir: userDataPath,
     token: mobileConfig.token,
     docxRenderer,
+    // Lets a paired phone read and toggle mobile access over HTTP so the
+    // sort lock can be released from either platform.
+    isMobileAccessEnabled: () => mobileConfig.enabled,
+    onMobileAccessToggle: (enabled) => {
+      applyMobileAccessEnabled(enabled).catch((err) => {
+        console.warn('[electron] Mobile access toggle failed:', err.message);
+      });
+    },
   });
 
   await startServer();
@@ -212,12 +237,8 @@ ipcMain.handle('get-mobile-access', () => {
 });
 
 /** Enable or disable LAN access; re-binds the server accordingly. */
-ipcMain.handle('set-mobile-access-enabled', async (_event, enabled) => {
-  mobileConfig.enabled = enabled === true;
-  mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
-  await restartServer();
-  broadcastMobileAccess();
-  return getMobileAccessInfo();
+ipcMain.handle('set-mobile-access-enabled', (_event, enabled) => {
+  return applyMobileAccessEnabled(enabled);
 });
 
 /** Rotate the pairing token; previously paired phones must re-scan. */

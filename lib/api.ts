@@ -25,7 +25,7 @@ interface UndoResponse {
 
 // ── Environment detection ─────────────────────────────────────────
 
-function isElectron(): boolean {
+export function isElectron(): boolean {
   return typeof window !== 'undefined' && typeof (window as any).electronAPI !== 'undefined';
 }
 
@@ -147,6 +147,14 @@ export async function sortFile(
 /** Undo the last sort operation. */
 export async function undoSort(): Promise<UndoResponse> {
   return apiPost('/api/undo');
+}
+
+/**
+ * Undo a specific history entry (per-item undo from the History tab).
+ * The file moves back to its original location and to the top of the queue.
+ */
+export async function undoHistoryItem(historyId: string): Promise<UndoResponse> {
+  return apiPost('/api/history/undo', { historyId });
 }
 
 /** Fetch sort history. */
@@ -275,23 +283,44 @@ export async function revealInFolder(filePath: string): Promise<void> {
   }
 }
 
-// ── Mobile access controls (Electron only) ────────────────────────
+// ── Mobile access controls ────────────────────────────────────────────
+//
+// Desktop reads full status (pairing URL, token) over IPC. Phones read
+// and toggle the enabled flag over HTTP so the sort lock can be released
+// from either platform.
 
-/** Current mobile access status (enabled, port, pairing URL, token). */
+/** Current mobile access status. On phones only the enabled flag is known. */
 export async function getMobileAccess(): Promise<MobileAccessInfo | null> {
-  if (!isElectron()) return null;
+  if (isElectron()) {
+    try {
+      return await getElectronAPI().getMobileAccess();
+    } catch {
+      return null;
+    }
+  }
   try {
-    return await getElectronAPI().getMobileAccess();
+    const { enabled } = await apiGet<{ enabled: boolean }>('/api/mobile-access');
+    return { enabled, port: null, lanIp: null, url: null };
   } catch {
     return null;
   }
 }
 
-/** Enable or disable LAN access for phones. */
+/** Enable or disable LAN access for phones (works from either platform). */
 export async function setMobileAccessEnabled(enabled: boolean): Promise<MobileAccessInfo | null> {
-  if (!isElectron()) return null;
+  if (isElectron()) {
+    try {
+      return await getElectronAPI().setMobileAccessEnabled(enabled);
+    } catch {
+      return null;
+    }
+  }
   try {
-    return await getElectronAPI().setMobileAccessEnabled(enabled);
+    const { enabled: next } = await apiPost<{ ok: boolean; enabled: boolean }>(
+      '/api/mobile-access/enabled',
+      { enabled },
+    );
+    return { enabled: next, port: null, lanIp: null, url: null };
   } catch {
     return null;
   }

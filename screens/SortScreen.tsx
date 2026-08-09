@@ -18,16 +18,10 @@ import FullscreenPreview from '../components/FullscreenPreview';
 import TutorialTarget from '../components/TutorialTarget';
 import { FileItem, SortAction, HistoryRecord, MobileAccessInfo } from '../lib/types';
 import { loadActions, addHistory } from '../lib/storage';
-import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort, getMobileAccess, onMobileAccessChanged } from '../lib/api';
+import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort, getMobileAccess, onMobileAccessChanged, setMobileAccessEnabled } from '../lib/api';
+import { DEMO_FILES } from '../lib/demoFiles';
 import { useTheme } from '../lib/ThemeContext';
 import { useTutorial } from '../lib/TutorialContext';
-
-// Shown only while the tutorial is active: local-only files, never sent to the server.
-const DEMO_FILES: FileItem[] = [
-  { id: 'demo-1', name: 'vacation-photo', extension: 'jpg', type: 'image', size: '2.4 MB', date: 'Jul 12, 2026' },
-  { id: 'demo-2', name: 'quarterly-report', extension: 'pdf', type: 'pdf', size: '840 KB', date: 'Jul 8, 2026' },
-  { id: 'demo-3', name: 'budget-2026', extension: 'xlsx', type: 'spreadsheet', size: '156 KB', date: 'Jun 30, 2026' },
-];
 
 export default function SortScreen() {
   const { colors, isDark } = useTheme();
@@ -52,6 +46,9 @@ export default function SortScreen() {
   const [demoUndo, setDemoUndo] = useState<FileItem[]>([]);
 
   const isElectron = typeof (window as any).electronAPI !== 'undefined';
+  // Single active sorter: while remote control is enabled, the phone owns
+  // sorting and the desktop becomes a read-only viewer.
+  const remoteLocked = !demoMode && isElectron && mobileAccessInfo?.enabled === true;
   const queueLenRef = useRef(queue.length);
   queueLenRef.current = queue.length;
 
@@ -99,9 +96,11 @@ export default function SortScreen() {
     }
   }, [demoMode]);
 
-  // Poll server state every 3s ONLY when not in IPC mode (multi-device sync via Tailscale)
+  // Poll server state every 3s for multi-device sync. Phones always poll;
+  // the desktop polls too while remote-locked so it can watch the phone sort.
+  const shouldPoll = !isElectron || remoteLocked;
   useEffect(() => {
-    if (isElectron) return; // IPC is synchronous, no polling needed
+    if (!shouldPoll) return;
 
     const interval = setInterval(async () => {
       try {
@@ -114,11 +113,12 @@ export default function SortScreen() {
         }
         setUndoAvailable((state.undoStack?.length ?? 0) > 0);
       } catch {
-        // server unreachable — keep current state
+        // server unreachable — keep current state; DisconnectedOverlay
+        // owns the disconnect indication on phones.
       }
     }, 3000);
     return () => clearInterval(interval);
-  }, [folderPath, isElectron]);
+  }, [folderPath, shouldPoll, isElectron]);
 
   const loadFromServer = async () => {
     try {
@@ -137,6 +137,21 @@ export default function SortScreen() {
       setLoading(false);
     }
   };
+
+  // Refresh queue/undo from the server without the loading spinner.
+  // Used to recover when another device already consumed the current card.
+  const resyncFromServer = useCallback(() => {
+    fetchState()
+      .then((state) => {
+        setQueue(state.files);
+        if (state.folderPath) setFolderPath(state.folderPath);
+        setSortedCount(state.history.length);
+        setUndoAvailable((state.undoStack?.length ?? 0) > 0);
+      })
+      .catch(() => {
+        // server unreachable — keep current state
+      });
+  }, []);
 
   const displayedQueue = demoMode ? demoQueue : queue;
   const current = displayedQueue[0];
@@ -199,6 +214,11 @@ export default function SortScreen() {
         dismissedRef.current.delete(current.id);
         setSorting(false);
         setActiveAction(null);
+        if (/not found in queue/i.test(e?.message || '')) {
+          // Another device already sorted this file — resync instead of
+          // leaving a stale card on screen.
+          resyncFromServer();
+        }
         return;
       }
 
@@ -226,10 +246,11 @@ export default function SortScreen() {
       // Pre-generate previews for the next files in the queue (lazy loading)
       pregeneratePreviews(5).catch(() => {});
     },
-    [current, demoMode, activeAction, notifyTutorial],
+    [current, demoMode, activeAction, notifyTutorial, resyncFromServer],
   );
 
   const handleUndo = async () => {
+    if (remoteLocked) return;
     // Tutorial: local-only undo
     if (demoMode) {
       const last = demoUndo[0];
@@ -249,25 +270,34 @@ export default function SortScreen() {
       }
     } catch (e: any) {
       console.warn('Undo failed:', e.message);
+      if (/nothing to undo/i.test(e?.message || '')) {
+        // Another device already consumed the undo stack — resync silently.
+        resyncFromServer();
+      }
     }
   };
 
   const handleAction = useCallback(
     (action: SortAction) => {
-      if (sorting || !current) return;
+      if (sorting || !current || remoteLocked) return;
       setSorting(true);
       setActiveAction(action);
       if (demoMode) notifyTutorial('button-sort');
     },
-    [sorting, current, demoMode, notifyTutorial],
+    [sorting, current, demoMode, notifyTutorial, remoteLocked],
   );
+
+  const handleDisableRemoteControl = async () => {
+    const updated = await setMobileAccessEnabled(false);
+    if (updated) setMobileAccessInfo(updated);
+  };
 
   // ── Keyboard hotkeys (web / Electron) ──────────────────────────
   useEffect(() => {
     if (Platform.OS !== 'web') return;
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (sorting) return;
+      if (sorting || remoteLocked) return;
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
 
       // 'u' for undo
@@ -287,7 +317,7 @@ export default function SortScreen() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [actions, sorting, handleAction, effectiveUndoAvailable, handleUndo]);
+  }, [actions, sorting, handleAction, effectiveUndoAvailable, handleUndo, remoteLocked]);
 
   // ── Renderers ──────────────────────────────────────────────────
 
@@ -309,11 +339,23 @@ export default function SortScreen() {
         )}
       </View>
       <View style={styles.badgeRow}>
+        {folderPath && isElectron && !demoMode && (
+          <Pressable
+            onPress={handlePickFolder}
+            accessibilityLabel="Switch folder"
+            style={({ pressed }) => [
+              styles.switchFolderButton,
+              { backgroundColor: colors.accentSoft, opacity: pressed ? 0.7 : 1 },
+            ]}
+          >
+            <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
+          </Pressable>
+        )}
         <TutorialTarget id="undo">
           <Pressable
             onPress={handleUndo}
-            disabled={!effectiveUndoAvailable}
-            style={[styles.undoButton, { backgroundColor: colors.accentSoft }, !effectiveUndoAvailable && styles.undoButtonDisabled]}
+            disabled={!effectiveUndoAvailable || remoteLocked}
+            style={[styles.undoButton, { backgroundColor: colors.accentSoft }, (!effectiveUndoAvailable || remoteLocked) && styles.undoButtonDisabled]}
           >
             <Ionicons name="arrow-undo" size={16} color={colors.accent} />
           </Pressable>
@@ -325,6 +367,34 @@ export default function SortScreen() {
       </View>
     </View>
   );
+
+  const renderRemoteLockBanner = () => {
+    if (!remoteLocked) return null;
+    return (
+      <View style={[styles.remoteLockBanner, { backgroundColor: colors.accentSoft }]}>
+        <View style={styles.remoteLockTextRow}>
+          <Ionicons name="phone-portrait-outline" size={18} color={colors.accent} />
+          <View style={styles.remoteLockText}>
+            <Text style={[styles.remoteLockTitle, { color: colors.accent }]}>
+              Remote control active
+            </Text>
+            <Text style={[styles.remoteLockSubtitle, { color: colors.textSecondary }]}>
+              Sorting is locked on this device while your phone is in control.
+            </Text>
+          </View>
+        </View>
+        <Pressable
+          onPress={handleDisableRemoteControl}
+          style={({ pressed }) => [
+            styles.remoteLockButton,
+            { backgroundColor: colors.accent, opacity: pressed ? 0.85 : 1 },
+          ]}
+        >
+          <Text style={styles.remoteLockButtonText}>Take back control</Text>
+        </Pressable>
+      </View>
+    );
+  };
 
   const renderLoading = () => (
     <View style={styles.center}>
@@ -386,6 +456,7 @@ export default function SortScreen() {
             actions={actions}
             activeAction={activeAction}
             sorting={sorting}
+            locked={remoteLocked}
             onSortStart={() => setSorting(true)}
             onSortComplete={handleSortComplete}
             onTap={demoMode ? undefined : (f) => openFile(f.uri ?? '')}
@@ -421,10 +492,11 @@ export default function SortScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['top']}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       {renderHeader()}
+      {renderRemoteLockBanner()}
       {renderContent()}
       {showActionButtons && (
         <TutorialTarget id="action-buttons">
-          <ActionButtons actions={actions} disabled={sorting || !current} onAction={handleAction} />
+          <ActionButtons actions={actions} disabled={sorting || !current || remoteLocked} onAction={handleAction} />
         </TutorialTarget>
       )}
       {fullscreenFile && (
@@ -463,6 +535,13 @@ const styles = StyleSheet.create({
   undoButtonDisabled: {
     opacity: 0.35,
   },
+  switchFolderButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   badge: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -497,5 +576,40 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  remoteLockBanner: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    borderRadius: 16,
+    padding: 14,
+    gap: 12,
+  },
+  remoteLockTextRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  remoteLockText: {
+    flex: 1,
+  },
+  remoteLockTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  remoteLockSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  remoteLockButton: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  remoteLockButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

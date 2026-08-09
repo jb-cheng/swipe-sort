@@ -83,6 +83,20 @@ function createServer(projectDir, options = {}) {
     }
   });
 
+  // ── API: undo a specific history entry (per-item undo) ─────────
+  app.post('/api/history/undo', (req, res) => {
+    const { historyId } = req.body;
+    if (!historyId) {
+      return res.status(400).json({ error: 'historyId is required' });
+    }
+    try {
+      const record = manager.undoHistoryItem(historyId);
+      res.json({ ok: true, undoRecord: record, state: manager.getState() });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── API: get history ────────────────────────────────────────────
   app.get('/api/history', (_req, res) => {
     res.json(manager.getState().history);
