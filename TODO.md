@@ -92,8 +92,6 @@
 
 - allow for undoing of stuff in the history tab, which brings it to the top of the queue on the sort tab
 
-- mobile access setting "control your desktop from this phone" in the remote-control does not work and should not work but it currently appears in the settings even though it should not
-
 - add a button/feature that allows users to re-select the folder as it currently does not look like there is one
 
 - find example pictures/files for the tutorial
