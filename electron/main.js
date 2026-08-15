@@ -1,18 +1,16 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
-const http = require('http');
 const fs = require('fs');
-const { StateManager } = require('../services/StateManager');
-const { scanFolder, sortFile, readFilePreview } = require('../services/fileOps');
-const { PreviewService } = require('../services/previewService');
+const { createServer } = require('../server/standalone');
+const mobileAccess = require('./mobile-access');
 
 let mainWindow;
-let manager;
-let previewService;
-let staticServer = null;
-let standaloneServer = null;
+let appServer = null;
+let serverPort = null;
+let mobileConfig = null;
 let captureWindow = null;
 let captureLock = Promise.resolve();
+let rebindLock = Promise.resolve();
 
 // ── DOCX visual capture (hidden BrowserWindow) ────────────────────
 
@@ -46,124 +44,180 @@ async function docxRenderer(html) {
 // ── CLI flag parsing ──────────────────────────────────────────────
 const args = process.argv.slice(2);
 const servePortIndex = args.indexOf('--serve');
-const SERVE_PORT = servePortIndex !== -1 && args[servePortIndex + 1]
+const REQUESTED_PORT = servePortIndex !== -1 && args[servePortIndex + 1]
   ? parseInt(args[servePortIndex + 1], 10)
-  : null;
+  : mobileAccess.DEFAULT_PORT;
 
-// ── Minimal static file server for dist/ ──────────────────────────
-function startStaticServer(distDir) {
-  const MIME = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-    '.map': 'application/json',
-    '.ttf': 'font/ttf',
-  };
+// ── App server lifecycle ──────────────────────────────────────────
+//
+// The standalone HTTP server is the single source of truth for all app
+// state (queue, history, undo). The desktop window and any paired phone
+// both talk to it over HTTP. IPC is reserved for native capabilities
+// that HTTP cannot provide (folder picker dialog, shell actions, window
+// controls).
 
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    let filePath = url.pathname === '/' ? path.join(distDir, 'index.html') : path.join(distDir, url.pathname);
+function bindHost() {
+  // Mobile access disabled: listen on loopback only, invisible to the LAN.
+  // Enabled: listen on all interfaces; remote requests still require the
+  // pairing token (enforced by the server).
+  return mobileConfig.enabled ? '0.0.0.0' : '127.0.0.1';
+}
 
-    // Prevent directory traversal
-    if (!filePath.startsWith(distDir)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
-
-    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType = MIME[ext] || 'application/octet-stream';
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(fs.readFileSync(filePath));
-    } else {
-      // SPA fallback: serve index.html
-      const indexHtml = path.join(distDir, 'index.html');
-      if (fs.existsSync(indexHtml)) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(fs.readFileSync(indexHtml));
-      } else {
-        res.writeHead(404);
-        res.end('Not found');
-      }
-    }
+function startServer() {
+  return new Promise((resolve, reject) => {
+    const host = bindHost();
+    const tryListen = (port) => {
+      const onError = (err) => {
+        if (err.code === 'EADDRINUSE' && port !== 0) {
+          console.warn(`[electron] Port ${port} in use, falling back to a free port`);
+          appServer.removeListener('error', onError);
+          tryListen(0);
+        } else {
+          reject(err);
+        }
+      };
+      appServer.once('error', onError);
+      appServer.listen(port, host, () => {
+        appServer.removeListener('error', onError);
+        serverPort = appServer.address().port;
+        console.log(
+          `[electron] App server on http://${host}:${serverPort}` +
+          ` (mobile access ${mobileConfig.enabled ? 'enabled' : 'disabled'})`,
+        );
+        resolve();
+      });
+    };
+    tryListen(REQUESTED_PORT);
   });
+}
 
-  return server;
+/** Re-bind the server after the bind host changes (mobile access toggle). */
+function restartServer() {
+  return new Promise((resolve, reject) => {
+    if (!appServer) return resolve();
+    appServer.closeAllConnections();
+    appServer.close(() => {
+      serverPort = null;
+      startServer().then(resolve).catch(reject);
+    });
+  });
+}
+
+/**
+ * Re-bind only when the actual bind address differs from the desired one.
+ * Lets queued toggles coalesce into a single rebind.
+ */
+function rebindIfNeeded() {
+  if (!appServer) return;
+  const address = appServer.address();
+  if (address && address.address === bindHost()) return;
+  return restartServer();
+}
+
+/** Snapshot of mobile access info for the renderer. */
+function getMobileAccessInfo() {
+  const lanIp = mobileAccess.getLanIPv4();
+  return {
+    enabled: mobileConfig.enabled,
+    port: serverPort,
+    lanIp,
+    url: lanIp && serverPort
+      ? mobileAccess.buildPairingUrl(lanIp, serverPort, mobileConfig.token)
+      : null,
+    token: mobileConfig.token,
+  };
+}
+
+function broadcastMobileAccess() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('mobile-access-changed', getMobileAccessInfo());
+  }
+}
+
+/**
+ * Enable or disable mobile (LAN) access. Single entry point used by both
+ * the desktop IPC handler and the paired phone's HTTP toggle request.
+ * Re-binds the server only when the flag actually changes.
+ */
+async function applyMobileAccessEnabled(enabled) {
+  const next = enabled === true;
+  mobileConfig.enabled = next;
+  mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
+  // Serialize rebinds: concurrent toggles from desktop IPC and the phone's
+  // HTTP request must not race on server.close().
+  rebindLock = rebindLock.then(rebindIfNeeded).catch((err) => {
+    console.warn('[electron] Server rebind failed:', err.message);
+  });
+  await rebindLock;
+  broadcastMobileAccess();
+  return getMobileAccessInfo();
 }
 
 // ── App ready ─────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
-  manager = new StateManager(userDataPath);
-  previewService = new PreviewService(userDataPath, { docxRenderer });
+  mobileConfig = mobileAccess.loadConfig(userDataPath);
 
-  // Start static file server for the built web app
-  const distDir = path.join(__dirname, '..', 'dist');
-  staticServer = startStaticServer(distDir);
-  staticServer.listen(0, () => {
-    const port = staticServer.address().port;
-    console.log(`[electron] Static server on http://localhost:${port}`);
-
-    // Create the main window
-    mainWindow = new BrowserWindow({
-      width: 420,
-      height: 780,
-      minWidth: 380,
-      minHeight: 600,
-      title: 'File Sorter',
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-
-    mainWindow.loadURL(`http://localhost:${port}`);
-
-    // Apply persisted window settings (stay-on-top, etc.)
-    const settings = loadWindowSettings();
-    if (settings.alwaysOnTop) {
-      applyAlwaysOnTop(true);
-    }
-
-    // If --serve flag is set, start the standalone server for mobile access
-    if (SERVE_PORT) {
-      startStandaloneServer(SERVE_PORT);
-    } else {
-      mainWindow.webContents.on('did-finish-load', () => {
-        mainWindow.webContents.send('server-port', null);
+  const projectDir = path.join(__dirname, '..');
+  appServer = createServer(projectDir, {
+    dataDir: userDataPath,
+    token: mobileConfig.token,
+    docxRenderer,
+    // Lets a paired phone read and toggle mobile access over HTTP so the
+    // sort lock can be released from either platform.
+    isMobileAccessEnabled: () => mobileConfig.enabled,
+    onMobileAccessToggle: (enabled) => {
+      applyMobileAccessEnabled(enabled).catch((err) => {
+        console.warn('[electron] Mobile access toggle failed:', err.message);
       });
-    }
+    },
+  });
 
-    mainWindow.on('closed', () => {
-      mainWindow = null;
-    });
+  await startServer();
+
+  // Create the main window, served by the app server itself
+  mainWindow = new BrowserWindow({
+    width: 420,
+    height: 780,
+    minWidth: 380,
+    minHeight: 600,
+    title: 'File Sorter',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Use the loopback IP, not `localhost`: it resolves deterministically and
+  // matches the server's Host allow-list without name-resolution surprises.
+  mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
+
+  // Apply persisted window settings (stay-on-top, etc.)
+  const settings = loadWindowSettings();
+  if (settings.alwaysOnTop) {
+    applyAlwaysOnTop(true);
+  }
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    broadcastMobileAccess();
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
   });
 });
 
-// ── Start optional standalone server (mobile access) ──────────────
-function startStandaloneServer(port) {
-  const { createServer } = require('../server/standalone');
-  const projectDir = path.join(__dirname, '..');
-  const userDataPath = app.getPath('userData');
-  const app_ = createServer(projectDir, { dataDir: userDataPath });
-  standaloneServer = app_.listen(port, () => {
-    console.log(`[electron] Standalone server running on http://localhost:${port}`);
-    if (mainWindow) {
-      mainWindow.webContents.send('server-port', port);
-    }
+// ── IPC handlers: native capabilities only ────────────────────────
+
+/** Native folder picker dialog. */
+ipcMain.handle('pick-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select a folder to sort',
+    properties: ['openDirectory'],
   });
-}
+  return result.canceled ? null : result.filePaths[0];
+});
 
 /** Get the OS-native file icon (Tier 2 preview). */
 ipcMain.handle('get-native-icon', async (_event, filePath) => {
@@ -189,118 +243,27 @@ ipcMain.handle('reveal-in-folder', (_event, filePath) => {
   shell.showItemInFolder(filePath);
 });
 
-// ── IPC handlers ──────────────────────────────────────────────────
+// ── IPC handlers: mobile access ───────────────────────────────────
 
-/** Get the full current state. */
-ipcMain.handle('get-state', () => {
-  return manager.getState();
+/** Current mobile access status (enabled, port, pairing URL, token). */
+ipcMain.handle('get-mobile-access', () => {
+  return getMobileAccessInfo();
 });
 
-/** Set the active folder — scans it and returns files. */
-ipcMain.handle('set-folder', async (_event, folderPath) => {
-  if (!folderPath) throw new Error('folderPath is required');
-  const files = scanFolder(folderPath);
-  manager.setFolder(folderPath, files);
-  return { files };
+/** Enable or disable LAN access; re-binds the server accordingly. */
+ipcMain.handle('set-mobile-access-enabled', (_event, enabled) => {
+  return applyMobileAccessEnabled(enabled);
 });
 
-/** Sort a file — move to action-named subfolder. */
-ipcMain.handle('sort-file', async (_event, fileId, action) => {
-  const state = manager.getState();
-  const file = state.files.find((f) => f.id === fileId);
-  if (!file) throw new Error('File not found in queue');
-
-  manager.executeSort(file, action);
-  return { remaining: manager.getState().files.length, undoStackLength: manager.getUndoStack().length };
-});
-
-/** Undo the last sort operation. */
-ipcMain.handle('undo-sort', async () => {
-  const record = manager.undoLastSort();
-  if (!record) throw new Error('Nothing to undo');
-  return { ok: true, state: manager.getState() };
-});
-
-/** Get history. */
-ipcMain.handle('get-history', () => {
-  return manager.getState().history;
-});
-
-/** Clear server-side history only (keeps folder and queue). */
-ipcMain.handle('clear-history', () => {
-  manager.clearHistory();
-  return { ok: true };
-});
-
-/** Get undo stack. */
-ipcMain.handle('get-undo-stack', () => {
-  return manager.getUndoStack();
-});
-
-/** Reset the entire state. */
-ipcMain.handle('reset-state', () => {
-  manager.reset();
-  return { ok: true };
-});
-
-/** Native folder picker dialog. */
-ipcMain.handle('pick-folder', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Select a folder to sort',
-    properties: ['openDirectory'],
-  });
-  return result.canceled ? null : result.filePaths[0];
-});
-
-/** Get a file preview (image, text, or rich content via Tier 3). */
-ipcMain.handle('get-file-preview', async (_event, fileId) => {
-  const state = manager.getState();
-  const file = state.files.find((f) => f.id === fileId);
-  if (!file) throw new Error('File not found in queue');
-
-  // Use PreviewService for Tier 3 generation (with caching)
-  const preview = await previewService.getPreview(file.uri, file.extension);
-  if (!preview) {
-    // Fall back to legacy preview
-    const legacy = readFilePreview(file.uri, file.extension);
-    if (!legacy) throw new Error('Preview not available for this file type');
-    if (legacy.type === 'image') {
-      return {
-        type: 'image',
-        contentType: legacy.contentType,
-        base64: legacy.data.toString('base64'),
-      };
-    }
-    return {
-      type: 'text',
-      contentType: legacy.contentType,
-      text: legacy.data,
-    };
+/** Rotate the pairing token; previously paired phones must re-scan. */
+ipcMain.handle('reset-mobile-token', async () => {
+  mobileConfig.token = mobileAccess.generateToken();
+  mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
+  if (appServer) {
+    appServer.setToken(mobileConfig.token);
   }
-
-  if (preview.type === 'image') {
-    return {
-      type: 'image',
-      contentType: preview.contentType,
-      base64: preview.data.toString('base64'),
-    };
-  }
-  return {
-    type: 'text',
-    contentType: preview.contentType,
-    text: preview.data,
-  };
-});
-
-/** Pre-generate previews for the next N files in the queue (lazy loading). */
-ipcMain.handle('pregenerate-previews', async (_event, count = 5) => {
-  const state = manager.getState();
-  const files = state.files.slice(0, count).map((f) => ({
-    uri: f.uri,
-    extension: f.extension,
-  }));
-  await previewService.pregeneratePreviews(files);
-  return { ok: true };
+  broadcastMobileAccess();
+  return getMobileAccessInfo();
 });
 
 // ── Window settings (stay-on-top) ─────────────────────────────────
@@ -354,14 +317,12 @@ ipcMain.handle('get-always-on-top', async () => {
 
 app.on('window-all-closed', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
-  if (staticServer) staticServer.close();
-  if (standaloneServer) standaloneServer.close();
+  if (appServer) appServer.close();
   app.quit();
 });
 
 app.on('activate', () => {
-  if (mainWindow === null && staticServer) {
-    const port = staticServer.address().port;
+  if (mainWindow === null && serverPort) {
     mainWindow = new BrowserWindow({
       width: 420,
       height: 780,
@@ -371,6 +332,6 @@ app.on('activate', () => {
         nodeIntegration: false,
       },
     });
-    mainWindow.loadURL(`http://localhost:${port}`);
+    mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
   }
 });

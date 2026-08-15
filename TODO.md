@@ -88,3 +88,16 @@
 | **High** | 1 | Mobile folder picker |
 | **Medium** | 6 | Mobile layout, macOS/Linux builds, Config UI, Custom keys, Dead code, Pagination |
 | **Low** | 7 | Expo Router, Tray mode, Notifications, Auto-start, Migration system, Branding, Lazy loading |
+
+
+- allow for undoing of stuff in the history tab, which brings it to the top of the queue on the sort tab
+
+- add a button/feature that allows users to re-select the folder as it currently does not look like there is one
+
+- find example pictures/files for the tutorial
+
+- add notes in the tutorial on how double clicking (on desktop) will open in file explorer, single click will open it, and holding on it will make preview larger if available (only for docs and pdfs)
+
+- does not pass WCAG AAA
+
+- dont let people sort files while the tutorial is teaching about double clicks, single clicks, or holding - find some other way to make it interactive without actually showing them because those are just test files anyways, maybe a video simulation/gif?

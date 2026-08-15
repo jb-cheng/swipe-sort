@@ -39,6 +39,13 @@ const ROWS: Row[] = [
     electronOnly: true,
   },
   {
+    screen: 'MobileAccessSettings',
+    icon: 'phone-portrait',
+    title: 'Mobile Access',
+    subtitle: 'Sort from your phone',
+    electronOnly: true,
+  },
+  {
     screen: 'HelpSettings',
     icon: 'help-circle',
     title: 'Help',

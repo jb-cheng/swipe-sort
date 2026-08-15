@@ -5,6 +5,7 @@ import SettingsHubScreen from './SettingsHubScreen';
 import AppearanceSettingsScreen from './AppearanceSettingsScreen';
 import SortActionsSettingsScreen from './SortActionsSettingsScreen';
 import WindowSettingsScreen from './WindowSettingsScreen';
+import MobileAccessSettingsScreen from './MobileAccessSettingsScreen';
 import HelpSettingsScreen from './HelpSettingsScreen';
 
 const Stack = createNativeStackNavigator<SettingsStackParamList>();
@@ -42,6 +43,11 @@ export default function SettingsNavigator() {
         name="WindowSettings"
         component={WindowSettingsScreen}
         options={{ title: 'Window' }}
+      />
+      <Stack.Screen
+        name="MobileAccessSettings"
+        component={MobileAccessSettingsScreen}
+        options={{ title: 'Mobile Access' }}
       />
       <Stack.Screen
         name="HelpSettings"

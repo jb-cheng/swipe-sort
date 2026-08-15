@@ -1,0 +1,22 @@
+Team Sync - Meeting Notes
+Date: Jul 24, 2026
+
+Attendees: Alex, Priya, Sam, Jordan
+
+Agenda
+1. Q3 roadmap review
+2. Launch checklist for the desktop release
+3. Open bugs and triage owners
+
+Decisions
+- Ship the pairing flow update behind a feature flag.
+- Move the weekly sync to Thursdays.
+
+Action items
+- Priya: draft the release notes by Friday.
+- Sam: fix the preview cache eviction bug.
+- Jordan: schedule the design review for next week.
+
+Notes
+The team agreed to keep the swipe-first flow as the default
+and to revisit keyboard customization after launch.

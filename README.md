@@ -26,17 +26,16 @@ npm run electron:dev       # Launch desktop app
 npm run electron:dev
 ```
 
-This builds the web app and launches Electron. No HTTP server is needed — the React UI talks directly to the Node.js backend via Electron IPC. All state is persisted to disk.
+This builds the web app and launches Electron. The React UI talks to an embedded HTTP server (single source of truth for all state); IPC is used only for native capabilities such as the folder picker dialog and opening files. All state is persisted to disk.
 
-### Mobile access via Tailscale/network
+### Mobile access (sort from your phone)
 
-Start Electron with the standalone server:
+1. Open **Settings > Mobile Access** in the desktop app and turn it on.
+2. Scan the QR code with your phone camera and open the link.
 
-```bash
-npm run electron:dev:serve
-```
+The desktop serves the same web UI on your local network (default port 3456). The QR code carries a pairing key; devices without it are rejected, and you can rotate the key any time. Both devices share one state and stay in sync. No Tailscale or other setup needed.
 
-This starts a lightweight HTTP server on port 3456 alongside the Electron window. Connect from your phone browser at `http://<tailscale-ip>:3456` to sort files remotely. All file operations go through the same backend — **multiple devices can sort simultaneously and stay in sync**.
+`npm run electron:dev:serve` is still supported as a port override (`--serve <port>`).
 
 ### Standalone server only (no Electron window)
 
@@ -50,6 +49,8 @@ Or custom port:
 node server/standalone.js --port 8080
 ```
 
+The server generates a pairing token on startup and prints the mobile access URL (including the token) to the console. Pass `--token <value>` to reuse a fixed token.
+
 ---
 
 ## Commands
@@ -59,7 +60,7 @@ node server/standalone.js --port 8080
 | `npm start` | Start Expo dev server |
 | `npm run build:web` | Build web app into `dist/` |
 | `npm run electron:dev` | Build web + launch Electron |
-| `npm run electron:dev:serve` | Build web + launch Electron with mobile server on port 3456 |
+| `npm run electron:dev:serve` | Build web + launch Electron with server port override |
 | `npm run electron:build` | Build web + package into Windows portable exe (`release/`) |
 | `npm run server` | Start standalone HTTP server on port 3456 |
 | `npm test` | Run Jest test suite |
@@ -70,59 +71,44 @@ node server/standalone.js --port 8080
 ## Architecture
 
 ```
-                          ┌──────────────────────────────┐
-                          │       Electron Window         │
-                          │  (React UI via dist/index.html)│
-                          │   talks to IPC bridge         │
-                          └──────────┬───────────────────┘
-                                     │ contextBridge / ipcRenderer
-                          ┌──────────▼───────────────────┐
-                          │    Electron Main Process      │
-                          │  ┌────────────────────────┐   │
-                          │  │   services/StateManager │   │
-                          │  │   - JSON file persistence│   │
-                          │  │   - Queue / History /   │   │
-                          │  │     Undo stack          │   │
-                          │  └────────┬───────────────┘   │
-                          │  ┌────────▼───────────────┐   │
-                          │  │   services/fileOps     │   │
-                          │  │   - scanFolder         │   │
-                          │  │   - sortFile / undoSort│   │
-                          │  └────────────────────────┘   │
-                          └──────────────────────────────┘
-
- MOBILE (Browser via Tailscale)
-        │
-        ▼
- ┌──────────────────────────────┐
- │   server/standalone.js       │
- │   (minimal http module,      │
- │    no Express dependency)     │
- │   ┌────────────────────────┐ │
- │   │   services/StateManager│ │
- │   │   services/fileOps     │ │
- │   └────────────────────────┘ │
- └──────────────────────────────┘
+ DESKTOP (Electron)                    PHONE (Browser, same Wi-Fi)
+ ┌────────────────────────────┐        ┌──────────────────────────┐
+ │ Electron window (React UI) │        │ Same React UI served by  │
+ └─────────────┬──────────────┘        │ the desktop's server     │
+               │ HTTP (loopback)       └────────────┬─────────────┘
+ ┌─────────────▼────────────────────────────────────▼─────────────┐
+ │ server/standalone.js (embedded in Electron, Node http module)  │
+ │  - REST API: state, folder, sort, undo, history, previews      │
+ │  - Serves dist/ static build                                   │
+ │  - Pairing-token auth for non-loopback clients                 │
+ │  ┌────────────────────────────────────────────────────────┐    │
+ │  │ services/StateManager  services/fileOps                │    │
+ │  │ services/previewService                                │    │
+ │  └────────────────────────────────────────────────────────┘    │
+ └─────────────────────────────────────────────────────────────────┘
+ IPC (contextBridge) is reserved for native-only features:
+ folder picker dialog, native file icons, open/reveal in explorer,
+ window controls, mobile access settings.
 ```
 
 ### Key modules
 
 | Module | Role |
 |---|---|
-| `electron/main.js` | Main process — IPC handlers, native dialogs, optional server startup |
-| `electron/preload.js` | Context bridge exposing all IPC methods to the renderer |
-| `server/standalone.js` | Lightweight HTTP server for mobile access (Node `http` module) |
-| `server/index.js` | Express server (legacy wrapper, delegates to shared services) |
-| `services/StateManager.js` | Persisted state — queue, history, undo stack (JSON file) |
-| `services/fileOps.js` | Core filesystem operations — scan, sort, undo |
-| `lib/api.ts` | Unified API client — routes to IPC or HTTP based on environment |
-| `screens/SortScreen.tsx` | Main sorting UI — swipeable cards, action buttons, undo |
+| `electron/main.js` | Main process: embeds the HTTP server (single source of truth), native IPC handlers, mobile access lifecycle |
+| `electron/preload.js` | Context bridge exposing native-only IPC methods to the renderer |
+| `electron/mobile-access.js` | Pairing token + enabled flag persistence, LAN IP discovery, pairing URL builder |
+| `server/standalone.js` | Lightweight HTTP server: REST API, static UI, token authorization |
+| `services/StateManager.js` | Persisted state: queue, history, undo stack (JSON file) |
+| `services/fileOps.js` | Core filesystem operations: scan, sort, undo |
+| `lib/api.ts` | HTTP API client with pairing-token injection; native helpers via IPC |
+| `screens/SortScreen.tsx` | Main sorting UI: swipeable cards, action buttons, undo |
 | `screens/HistoryScreen.tsx` | List of past sort operations |
 | `screens/SettingsScreen.tsx` | Customize action labels, keys, swipe directions, colors |
 
 ### Features
 
-- **IPC-first**: Desktop mode uses Electron IPC directly (no HTTP overhead)
+- **Single HTTP source of truth**: Desktop and phones both talk to the embedded HTTP server; IPC is reserved for native capabilities
 - **Persistent state**: Queue, history, and undo stack survive app restarts
 - **Undo**: Undo the last sort (or multiple sorts) to restore files to their original location
 - **Multi-device sync**: Polling (every 3s) keeps phone and desktop in sync when using the standalone server

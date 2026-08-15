@@ -104,6 +104,35 @@ export default function FilePreview({ file }: Props) {
 
   const iconSize = Math.min(windowWidth * 0.18, 128);
 
+  // ── Tutorial demo files: bundled previews, no server fetch ────────
+  if (file.previewAsset) {
+    const ext = file.extension.toLowerCase();
+    const showBadge = ext === 'pdf' || ext === 'docx';
+    return (
+      <View style={styles.imageContainer}>
+        <Image source={file.previewAsset} style={styles.image} resizeMode="contain" />
+        {showBadge && (
+          <View style={styles.textFooter}>
+            <Text style={styles.textFooterLabel}>{ext.toUpperCase()} PREVIEW</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+  if (file.previewText) {
+    return (
+      <View style={styles.textWrapper}>
+        <ScrollView
+          style={styles.textContainer}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled
+        >
+          <Text style={styles.textContent}>{file.previewText}</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
   // ── Determine which tier to display ──────────────────────────
   // Priority: Tier 3 > Tier 2 > Tier 1
 

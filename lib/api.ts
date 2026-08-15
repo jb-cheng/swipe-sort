@@ -1,4 +1,5 @@
-import { FileItem, HistoryRecord, SortAction, UndoRecord } from './types';
+import { FileItem, HistoryRecord, MobileAccessInfo, SortAction, UndoRecord } from './types';
+import { loadPairingToken, savePairingToken } from './storage';
 
 const BASE = '';
 
@@ -22,21 +23,9 @@ interface UndoResponse {
   state?: StateResponse;
 }
 
-interface PreviewResponse {
-  type: 'image' | 'text';
-  contentType: string;
-  base64?: string;
-  text?: string;
-}
-
-interface NativeIconResponse {
-  type: 'image';
-  dataUrl: string;
-}
-
 // ── Environment detection ─────────────────────────────────────────
 
-function isElectron(): boolean {
+export function isElectron(): boolean {
   return typeof window !== 'undefined' && typeof (window as any).electronAPI !== 'undefined';
 }
 
@@ -44,53 +33,118 @@ function getElectronAPI() {
   const api = (window as any)?.electronAPI;
   if (!api) throw new Error('Not running in Electron');
   return api as {
-    getState(): Promise<StateResponse>;
-    setFolder(folderPath: string): Promise<{ files: FileItem[] }>;
-    sortFile(fileId: string, action: SortAction): Promise<SortResponse>;
-    undoSort(): Promise<UndoResponse>;
-    getHistory(): Promise<HistoryRecord[]>;
-    clearHistory(): Promise<void>;
-    getUndoStack(): Promise<UndoRecord[]>;
-    resetState(): Promise<{ ok: boolean }>;
     pickFolder(): Promise<string | null>;
-    getFilePreview(fileId: string): Promise<PreviewResponse>;
-    getNativeIcon(filePath: string): Promise<NativeIconResponse | null>;
-    pregeneratePreviews(count?: number): Promise<{ ok: boolean }>;
+    getNativeIcon(filePath: string): Promise<{ type: 'image'; dataUrl: string } | null>;
     setAlwaysOnTop(enabled: boolean): Promise<{ ok: boolean }>;
     getAlwaysOnTop(): Promise<{ enabled: boolean }>;
     openFile(filePath: string): Promise<void>;
     revealInFolder(filePath: string): Promise<void>;
-    onServerPort(callback: (port: number | null) => void): void;
+    getMobileAccess(): Promise<MobileAccessInfo>;
+    setMobileAccessEnabled(enabled: boolean): Promise<MobileAccessInfo>;
+    resetMobileToken(): Promise<MobileAccessInfo>;
+    onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): () => void;
   };
 }
 
-// ── API functions ─────────────────────────────────────────────────
+// ── Pairing token ─────────────────────────────────────────────────
+//
+// Phones reach the server by scanning a QR code whose URL carries the
+// pairing token as ?t=<token>. On first load we capture it, persist it,
+// and strip it from the address bar. Every subsequent API request sends
+// it as a Bearer token. The desktop window connects over loopback, which
+// the server trusts unconditionally, so it never needs the token.
+
+let tokenPromise: Promise<string | null> | null = null;
+
+function getToken(): Promise<string | null> {
+  if (!tokenPromise) {
+    tokenPromise = loadPairingToken().catch(() => null);
+  }
+  return tokenPromise;
+}
+
+/**
+ * Capture the pairing token from the current URL (?t=...), persist it,
+ * and clean the address bar. Safe to call multiple times; runs only in
+ * browser environments.
+ */
+export function capturePairingToken(): void {
+  if (typeof window === 'undefined') return;
+  const location = (window as any).location;
+  if (!location || typeof location.search !== 'string') return;
+
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t');
+  if (!token) return;
+
+  params.delete('t');
+  const remaining = params.toString();
+  const cleanUrl =
+    location.pathname + (remaining ? `?${remaining}` : '') + (location.hash || '');
+  if (typeof (window as any).history?.replaceState === 'function') {
+    (window as any).history.replaceState(null, '', cleanUrl);
+  }
+
+  // Reset the memoized loader so the freshly scanned token is used.
+  tokenPromise = Promise.resolve(token);
+  savePairingToken(token).catch(() => {
+    // Storage failure is non-fatal; the in-memory token still works
+    // for this session.
+  });
+}
+
+// Run capture as early as possible on module load (browser only).
+capturePairingToken();
+
+// ── HTTP transport ────────────────────────────────────────────────
+
+/** Error carrying the HTTP status so callers can tell e.g. 401 from offline. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { headers: await authHeaders() });
+  if (!res.ok) throw new ApiError(res.status, `Server error: ${res.status}`);
+  return res.json();
+}
+
+async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { ...(await authHeaders()) };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new ApiError(res.status, err.error || `Server error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── API functions (HTTP: shared by desktop window and phones) ─────
 
 /** Fetch the current state (folder, file queue, history, undo stack). */
 export async function fetchState(): Promise<StateResponse> {
-  if (isElectron()) {
-    return getElectronAPI().getState();
-  }
-  const res = await fetch(`${BASE}/api/state`);
-  if (!res.ok) throw new Error(`Server error: ${res.status}`);
-  return res.json();
+  return apiGet('/api/state');
 }
 
 /** Set the folder path — server scans it and returns shuffled files. */
 export async function setFolder(folderPath: string): Promise<{ files: FileItem[] }> {
-  if (isElectron()) {
-    return getElectronAPI().setFolder(folderPath);
-  }
-  const res = await fetch(`${BASE}/api/folder`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folderPath }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error || `Server error: ${res.status}`);
-  }
-  return res.json();
+  return apiPost('/api/folder', { folderPath });
 }
 
 /** Sort a file (move to action-named subfolder). */
@@ -98,70 +152,40 @@ export async function sortFile(
   fileId: string,
   action: SortAction,
 ): Promise<SortResponse> {
-  if (isElectron()) {
-    return getElectronAPI().sortFile(fileId, action);
-  }
-  const res = await fetch(`${BASE}/api/sort`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileId, action }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error || `Server error: ${res.status}`);
-  }
-  return res.json();
+  return apiPost('/api/sort', { fileId, action });
 }
 
 /** Undo the last sort operation. */
 export async function undoSort(): Promise<UndoResponse> {
-  if (isElectron()) {
-    return getElectronAPI().undoSort();
-  }
-  const res = await fetch(`${BASE}/api/undo`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error || `Server error: ${res.status}`);
-  }
-  return res.json();
+  return apiPost('/api/undo');
+}
+
+/**
+ * Undo a specific history entry (per-item undo from the History tab).
+ * The file moves back to its original location and to the top of the queue.
+ */
+export async function undoHistoryItem(historyId: string): Promise<UndoResponse> {
+  return apiPost('/api/history/undo', { historyId });
 }
 
 /** Fetch sort history. */
 export async function fetchHistory(): Promise<HistoryRecord[]> {
-  if (isElectron()) {
-    return getElectronAPI().getHistory();
-  }
-  const res = await fetch(`${BASE}/api/history`);
-  if (!res.ok) throw new Error(`Server error: ${res.status}`);
-  return res.json();
+  return apiGet('/api/history');
 }
 
-/** Clear server-side history (keeps folder, queue, and undo stack). */
+/** Clear server-side history (also clears the undo stack; keeps folder and queue). */
 export async function clearServerHistory(): Promise<void> {
-  if (isElectron()) {
-    await getElectronAPI().clearHistory();
-    return;
-  }
-  await fetch(`${BASE}/api/clear-history`, { method: 'POST' });
+  await apiPost('/api/clear-history');
 }
 
 /** Fetch undo stack. */
 export async function fetchUndoStack(): Promise<UndoRecord[]> {
-  if (isElectron()) {
-    return getElectronAPI().getUndoStack();
-  }
-  const res = await fetch(`${BASE}/api/undo-stack`);
-  if (!res.ok) throw new Error(`Server error: ${res.status}`);
-  return res.json();
+  return apiGet('/api/undo-stack');
 }
 
 /** Reset server state (clear folder, files, history, undo). */
 export async function resetServer(): Promise<void> {
-  if (isElectron()) {
-    await getElectronAPI().resetState();
-    return;
-  }
-  await fetch(`${BASE}/api/reset`, { method: 'POST' });
+  await apiPost('/api/reset');
 }
 
 /**
@@ -169,23 +193,10 @@ export async function resetServer(): Promise<void> {
  * Returns a data URL for images or plain text for text files.
  */
 export async function getFilePreview(fileId: string): Promise<string | null> {
-  if (isElectron()) {
-    try {
-      const result = await getElectronAPI().getFilePreview(fileId);
-      if (result.type === 'image' && result.base64) {
-        return `data:${result.contentType};base64,${result.base64}`;
-      }
-      if (result.type === 'text' && result.text) {
-        return result.text;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
   try {
-    const res = await fetch(`${BASE}/api/preview/${encodeURIComponent(fileId)}`);
+    const res = await fetch(`${BASE}/api/preview/${encodeURIComponent(fileId)}`, {
+      headers: await authHeaders(),
+    });
     if (!res.ok) return null;
     const contentType = res.headers.get('Content-Type') || '';
     if (contentType.startsWith('image/')) {
@@ -205,6 +216,19 @@ export async function getFilePreview(fileId: string): Promise<string | null> {
 }
 
 /**
+ * Pre-generate previews for the next N files in the queue (lazy loading).
+ */
+export async function pregeneratePreviews(count: number = 5): Promise<void> {
+  try {
+    await apiPost('/api/previews/pregenerate', { count });
+  } catch {
+    // best-effort
+  }
+}
+
+// ── Native capabilities (Electron only) ───────────────────────────
+
+/**
  * Fetch the OS-native file icon (Tier 2 preview — Electron only).
  * Returns a data URL for the icon image, or null.
  */
@@ -219,29 +243,6 @@ export async function getNativeIcon(fileUri: string): Promise<string | null> {
     // ignore
   }
   return null;
-}
-
-/**
- * Pre-generate previews for the next N files in the queue (lazy loading).
- */
-export async function pregeneratePreviews(count: number = 5): Promise<void> {
-  if (isElectron()) {
-    try {
-      await getElectronAPI().pregeneratePreviews(count);
-    } catch {
-      // best-effort
-    }
-    return;
-  }
-  try {
-    await fetch(`${BASE}/api/previews/pregenerate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count }),
-    });
-  } catch {
-    // best-effort
-  }
 }
 
 /**
@@ -291,4 +292,77 @@ export async function revealInFolder(filePath: string): Promise<void> {
   } catch {
     // ignore
   }
+}
+
+// ── Mobile access controls ────────────────────────────────────────────
+//
+// Desktop reads full status (pairing URL, token) over IPC. Phones read
+// and toggle the enabled flag over HTTP so the sort lock can be released
+// from either platform.
+
+/** Current mobile access status. On phones only the enabled flag is known. */
+export async function getMobileAccess(): Promise<MobileAccessInfo | null> {
+  if (isElectron()) {
+    try {
+      return await getElectronAPI().getMobileAccess();
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const { enabled } = await apiGet<{ enabled: boolean }>('/api/mobile-access');
+    return { enabled, port: null, lanIp: null, url: null };
+  } catch {
+    return null;
+  }
+}
+
+/** Enable or disable LAN access for phones (works from either platform). */
+export async function setMobileAccessEnabled(enabled: boolean): Promise<MobileAccessInfo | null> {
+  if (isElectron()) {
+    try {
+      return await getElectronAPI().setMobileAccessEnabled(enabled);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const { enabled: next } = await apiPost<{ ok: boolean; enabled: boolean }>(
+      '/api/mobile-access/enabled',
+      { enabled },
+    );
+    return { enabled: next, port: null, lanIp: null, url: null };
+  } catch {
+    return null;
+  }
+}
+
+/** Rotate the pairing token; previously paired phones must re-scan. */
+export async function resetMobileToken(): Promise<MobileAccessInfo | null> {
+  if (!isElectron()) return null;
+  try {
+    return await getElectronAPI().resetMobileToken();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Subscribe to mobile access status changes (desktop only).
+ * Returns an unsubscribe function for effect cleanup.
+ */
+export function onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): () => void {
+  if (!isElectron()) return () => {};
+  try {
+    const unsubscribe = getElectronAPI().onMobileAccessChanged(callback);
+    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
+  } catch {
+    return () => {};
+  }
+}
+
+/** Pairing URL safe to display in the UI (token stripped). */
+export function displayPairingUrl(info: MobileAccessInfo | null): string | null {
+  if (!info || !info.url) return null;
+  return info.url.split('/?t=')[0];
 }

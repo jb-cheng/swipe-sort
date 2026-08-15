@@ -31,12 +31,20 @@ export default function FullscreenPreview({ file, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const cancelledRef = useRef(false);
 
+  // Tutorial demo files carry bundled previews; never hit the preview API.
+  const hasBundledPreview = !!(file.previewAsset || file.previewText);
+
   const opacity = useSharedValue(0);
   const scale = useSharedValue(0.9);
 
   useEffect(() => {
     opacity.value = withTiming(1, { duration: 200 });
     scale.value = withTiming(1, { duration: 200 });
+
+    if (hasBundledPreview) {
+      setLoading(false);
+      return;
+    }
 
     cancelledRef.current = false;
     getFilePreview(file.id)
@@ -59,7 +67,7 @@ export default function FullscreenPreview({ file, onClose }: Props) {
     return () => {
       cancelledRef.current = true;
     };
-  }, [file.id]);
+  }, [file.id, hasBundledPreview]);
 
   const handleClose = () => {
     opacity.value = withTiming(0, { duration: 150 });
@@ -93,7 +101,21 @@ export default function FullscreenPreview({ file, onClose }: Props) {
             <ActivityIndicator size="large" color="rgba(255,255,255,0.7)" />
           )}
 
-          {!loading && previewType === 'image' && preview && (
+          {!loading && file.previewAsset && (
+            <Image
+              source={file.previewAsset}
+              style={styles.image}
+              resizeMode="contain"
+            />
+          )}
+
+          {!loading && !file.previewAsset && file.previewText && (
+            <ScrollView style={styles.textScroll} showsVerticalScrollIndicator={false}>
+              <Text style={styles.textContent}>{file.previewText}</Text>
+            </ScrollView>
+          )}
+
+          {!loading && !hasBundledPreview && previewType === 'image' && preview && (
             <Image
               source={{ uri: preview }}
               style={styles.image}
@@ -101,7 +123,7 @@ export default function FullscreenPreview({ file, onClose }: Props) {
             />
           )}
 
-          {!loading && previewType === 'text' && preview && (
+          {!loading && !hasBundledPreview && previewType === 'text' && preview && (
             <ScrollView style={styles.textScroll} showsVerticalScrollIndicator={false}>
               <Text style={styles.textContent}>
                 {preview.startsWith('META:') ? preview.replace(/^META:/, '') : preview}
@@ -109,7 +131,7 @@ export default function FullscreenPreview({ file, onClose }: Props) {
             </ScrollView>
           )}
 
-          {!loading && !preview && (
+          {!loading && !hasBundledPreview && !preview && (
             <View style={styles.noPreview}>
               <Ionicons name="eye-off-outline" size={40} color="rgba(255,255,255,0.4)" />
               <Text style={styles.noPreviewText}>No preview available</Text>

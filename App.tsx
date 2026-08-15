@@ -12,6 +12,7 @@ import SortScreen from './screens/SortScreen';
 import HistoryScreen from './screens/HistoryScreen';
 import SettingsNavigator from './screens/settings/SettingsNavigator';
 import ErrorBoundary from './components/ErrorBoundary';
+import DisconnectedOverlay from './components/DisconnectedOverlay';
 import TutorialOverlay from './components/tutorial/TutorialOverlay';
 import TutorialTarget from './components/TutorialTarget';
 import { ThemeProvider, useTheme } from './lib/ThemeContext';
@@ -92,6 +93,7 @@ function AppContent() {
           <Tab.Screen name="Settings" component={SettingsNavigator} options={{ tabBarButton: SettingsTabButton }} />
         </Tab.Navigator>
         {tutorialActive && <TutorialOverlay />}
+        <DisconnectedOverlay />
       </NavigationContainer>
     </SafeAreaProvider>
   );

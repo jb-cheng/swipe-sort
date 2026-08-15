@@ -11,6 +11,6 @@ module.exports = {
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   // Mock non-code imports
   moduleNameMapper: {
-    '\\.(png|jpg|jpeg|gif|svg)$': '<rootDir>/__mocks__/fileMock.js',
+    '\\.(png|jpg|jpeg|gif|svg|pdf|txt)$': '<rootDir>/__mocks__/fileMock.js',
   },
 };

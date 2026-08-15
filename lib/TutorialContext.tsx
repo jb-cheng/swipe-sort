@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react';
+import { Platform } from 'react-native';
 import { markTutorialSeen } from './storage';
 
 export interface TargetRect {
@@ -43,6 +44,30 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     completion: ['sort', 'button-sort'],
   },
   {
+    id: 'card-interactions',
+    screen: 'Sort',
+    targetKey: 'card',
+    title: Platform.OS === 'web' ? 'Quick Card Shortcuts' : 'Quick Card Tricks',
+    body:
+      Platform.OS === 'web'
+        ? 'Click the card once to open the file in its default app. Double click to reveal it in your file explorer.'
+        : 'Tap the card once to open the file in its default app.',
+    completion: ['manual'],
+    actionLabel: 'Next',
+  },
+  {
+    id: 'full-preview',
+    screen: 'Sort',
+    targetKey: 'card',
+    title: 'Bigger Preview',
+    body:
+      Platform.OS === 'web'
+        ? 'Hold the card down for a moment to open a larger fullscreen preview. It works for documents and PDFs whenever a preview is available.'
+        : 'Press and hold the card to open a larger fullscreen preview. It works for documents and PDFs whenever a preview is available.',
+    completion: ['manual'],
+    actionLabel: 'Next',
+  },
+  {
     id: 'undo',
     screen: 'Sort',
     targetKey: 'undo',
@@ -80,7 +105,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     screen: 'Settings',
     targetKey: 'settings-list',
     title: 'Make It Yours',
-    body: 'Themes live in Appearance, hotkeys and swipe directions in Sort Actions, and you can replay this tutorial anytime from Help.',
+    body: 'Themes live in Appearance, hotkeys and swipe directions in Sort Actions, and you can replay this tutorial anytime from Help. To sort a different folder later, tap the folder icon next to the undo button on the Sort tab.',
     completion: ['manual'],
     actionLabel: 'Finish',
   },
