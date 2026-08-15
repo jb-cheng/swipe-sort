@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import EmptyIllustration from './EmptyIllustration';
-import { fetchState, isElectron } from '../lib/api';
+import { fetchState, isElectron, ApiError } from '../lib/api';
 import { useTheme } from '../lib/ThemeContext';
 import { useTutorial } from '../lib/TutorialContext';
 
@@ -24,6 +24,10 @@ export default function DisconnectedOverlay() {
   const [visible, setVisible] = useState(false);
   const wasConnectedRef = useRef(false);
   const failuresRef = useRef(0);
+  // Set when the server rejects our pairing token (401): the desktop
+  // rotated the key or turned mobile access off, and retrying with the
+  // same token can never succeed. The user must re-scan the QR code.
+  const unauthorizedRef = useRef(false);
 
   useEffect(() => {
     if (isElectron() || tutorialActive) return;
@@ -32,9 +36,13 @@ export default function DisconnectedOverlay() {
       try {
         await fetchState();
         failuresRef.current = 0;
+        unauthorizedRef.current = false;
         wasConnectedRef.current = true;
         setVisible(false);
-      } catch {
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          unauthorizedRef.current = true;
+        }
         // Only surface a disconnect after at least one successful poll; a
         // phone that never connected shows the screens' own error states.
         if (!wasConnectedRef.current) return;
@@ -53,19 +61,23 @@ export default function DisconnectedOverlay() {
       failuresRef.current = 0;
       setVisible(false);
     } catch {
-      // still unreachable — polling keeps retrying in the background
+      // still unreachable: polling keeps retrying in the background
     }
   };
 
   if (!visible) return null;
 
+  const unauthorized = unauthorizedRef.current;
+
   return (
     <View style={[styles.overlay, { backgroundColor: colors.bg }]}>
       <EmptyIllustration
-        emoji="📡"
-        title="Disconnected"
-        subtitle="Remote control was turned off or the desktop app closed. Enable mobile access on the desktop again, then reconnect."
-        actions={[{ label: 'Reconnect', onPress: handleReconnect }]}
+        emoji={unauthorized ? '🔑' : '📡'}
+        title={unauthorized ? 'Pairing expired' : 'Disconnected'}
+        subtitle={unauthorized
+          ? 'The desktop rotated its pairing key or turned off remote control. Scan the QR code in Settings > Mobile Access again.'
+          : 'Remote control was turned off or the desktop app closed. Enable mobile access on the desktop again, then reconnect.'}
+        actions={unauthorized ? undefined : [{ label: 'Reconnect', onPress: handleReconnect }]}
       />
     </View>
   );

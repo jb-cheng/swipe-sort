@@ -99,7 +99,6 @@ The server generates a pairing token on startup and prints the mobile access URL
 | `electron/preload.js` | Context bridge exposing native-only IPC methods to the renderer |
 | `electron/mobile-access.js` | Pairing token + enabled flag persistence, LAN IP discovery, pairing URL builder |
 | `server/standalone.js` | Lightweight HTTP server: REST API, static UI, token authorization |
-| `server/index.js` | Express server (legacy wrapper, delegates to shared services) |
 | `services/StateManager.js` | Persisted state: queue, history, undo stack (JSON file) |
 | `services/fileOps.js` | Core filesystem operations: scan, sort, undo |
 | `lib/api.ts` | HTTP API client with pairing-token injection; native helpers via IPC |
@@ -109,7 +108,7 @@ The server generates a pairing token on startup and prints the mobile access URL
 
 ### Features
 
-- **IPC-first**: Desktop mode uses Electron IPC directly (no HTTP overhead)
+- **Single HTTP source of truth**: Desktop and phones both talk to the embedded HTTP server; IPC is reserved for native capabilities
 - **Persistent state**: Queue, history, and undo stack survive app restarts
 - **Undo**: Undo the last sort (or multiple sorts) to restore files to their original location
 - **Multi-device sync**: Polling (every 3s) keeps phone and desktop in sync when using the standalone server

@@ -18,6 +18,7 @@ import {
   resetMobileToken,
   onMobileAccessChanged,
   isElectron,
+  displayPairingUrl,
 } from '../../lib/api';
 
 export default function MobileAccessSettingsScreen() {
@@ -29,7 +30,7 @@ export default function MobileAccessSettingsScreen() {
   useEffect(() => {
     if (!onDesktop) return;
     getMobileAccess().then(setInfo).catch(() => {});
-    onMobileAccessChanged(setInfo);
+    return onMobileAccessChanged(setInfo);
   }, [onDesktop]);
 
   const handleToggle = async (value: boolean) => {
@@ -47,7 +48,7 @@ export default function MobileAccessSettingsScreen() {
   };
 
   const enabled = info?.enabled === true;
-  const displayUrl = info?.url ? info.url.split('/?t=')[0] : null;
+  const displayUrl = displayPairingUrl(info);
 
   // Desktop-only screen: phones control remote access by being paired or
   // unpaired from the desktop, so this UI never renders on a remote.

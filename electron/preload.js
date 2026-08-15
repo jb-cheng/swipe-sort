@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setMobileAccessEnabled: (enabled) => ipcRenderer.invoke('set-mobile-access-enabled', enabled),
   resetMobileToken: () => ipcRenderer.invoke('reset-mobile-token'),
   onMobileAccessChanged: (callback) => {
-    ipcRenderer.on('mobile-access-changed', (_event, info) => callback(info));
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on('mobile-access-changed', listener);
+    return () => ipcRenderer.removeListener('mobile-access-changed', listener);
   },
 });

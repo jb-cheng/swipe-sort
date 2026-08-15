@@ -97,3 +97,7 @@
 - find example pictures/files for the tutorial
 
 - add notes in the tutorial on how double clicking (on desktop) will open in file explorer, single click will open it, and holding on it will make preview larger if available (only for docs and pdfs)
+
+- does not pass WCAG AAA
+
+- dont let people sort files while the tutorial is teaching about double clicks, single clicks, or holding - find some other way to make it interactive without actually showing them because those are just test files anyways, maybe a video simulation/gif?

@@ -4,9 +4,36 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { createServer, authorizeRequest, isLoopbackAddress } = require('../server/standalone');
+const http = require('http');
+const {
+  createServer,
+  authorizeRequest,
+  isLoopbackAddress,
+  isAllowedHost,
+} = require('../server/standalone');
 
 const TOKEN = 'a'.repeat(64);
+
+/**
+ * Start a standalone server on a random loopback port for tests.
+ * Returns the server, its base URL, and a close() that also removes
+ * the temp data directory.
+ */
+async function startTestServer(options = {}) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-sorter-test-'));
+  const server = createServer(path.join(__dirname, '..'), { dataDir, token: TOKEN, ...options });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    server,
+    dataDir,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () =>
+      new Promise((resolve) => server.close(() => {
+        fs.rmSync(dataDir, { recursive: true, force: true });
+        resolve();
+      })),
+  };
+}
 
 describe('isLoopbackAddress', () => {
   it('accepts IPv4 and IPv6 loopback forms', () => {
@@ -19,6 +46,22 @@ describe('isLoopbackAddress', () => {
     expect(isLoopbackAddress('192.168.1.42')).toBe(false);
     expect(isLoopbackAddress('10.0.0.5')).toBe(false);
     expect(isLoopbackAddress(undefined)).toBe(false);
+  });
+});
+
+describe('isAllowedHost', () => {
+  it('accepts loopback host names with or without a port', () => {
+    expect(isAllowedHost('localhost')).toBe(true);
+    expect(isAllowedHost('localhost:3456')).toBe(true);
+    expect(isAllowedHost('127.0.0.1:3456')).toBe(true);
+    expect(isAllowedHost('[::1]:3456')).toBe(true);
+  });
+
+  it('rejects arbitrary and rebinding-style host names', () => {
+    expect(isAllowedHost('evil.example.com')).toBe(false);
+    expect(isAllowedHost('evil.example.com:3456')).toBe(false);
+    expect(isAllowedHost('169.254.1.1')).toBe(false);
+    expect(isAllowedHost(undefined)).toBe(false);
   });
 });
 
@@ -46,28 +89,18 @@ describe('authorizeRequest', () => {
 });
 
 describe('standalone server integration', () => {
-  let server;
-  let baseUrl;
-  let dataDir;
+  let ctx;
 
-  beforeAll((done) => {
-    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-sorter-test-'));
-    server = createServer(path.join(__dirname, '..'), { dataDir, token: TOKEN });
-    server.listen(0, '127.0.0.1', () => {
-      baseUrl = `http://127.0.0.1:${server.address().port}`;
-      done();
-    });
+  beforeAll(async () => {
+    ctx = await startTestServer();
   });
 
-  afterAll((done) => {
-    server.close(() => {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      done();
-    });
+  afterAll(async () => {
+    await ctx.close();
   });
 
   it('serves /api/state to loopback without a token', async () => {
-    const res = await fetch(`${baseUrl}/api/state`);
+    const res = await fetch(`${ctx.baseUrl}/api/state`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toHaveProperty('files');
@@ -75,12 +108,48 @@ describe('standalone server integration', () => {
   });
 
   it('rejects unknown API routes (not a crash)', async () => {
-    const res = await fetch(`${baseUrl}/api/nope`, { method: 'POST' });
+    const res = await fetch(`${ctx.baseUrl}/api/nope`, { method: 'POST' });
     expect([404, 405]).toContain(res.status);
   });
 
+  it('sends no CORS headers: every client is same-origin', async () => {
+    const res = await fetch(`${ctx.baseUrl}/api/state`);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    expect(res.headers.get('access-control-allow-methods')).toBeNull();
+  });
+
+  it('rejects API requests with a Host outside the allow-list', async () => {
+    // DNS-rebinding defense: a page on evil.example.com pointed at this
+    // server arrives with a Host header we never intend to serve.
+    // Raw http.request is required: fetch() strips the Host header.
+    const status = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port: ctx.server.address().port,
+          path: '/api/state',
+          headers: { Host: 'evil.example.com' },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(403);
+  });
+
+  it('rejects cross-origin browser requests (Origin differs from Host)', async () => {
+    const res = await fetch(`${ctx.baseUrl}/api/state`, {
+      headers: { Origin: 'http://evil.example.com' },
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('serves index.html with no-store so phones never pin to a stale bundle', async () => {
-    const res = await fetch(`${baseUrl}/`);
+    const res = await fetch(`${ctx.baseUrl}/`);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
@@ -93,18 +162,18 @@ describe('standalone server integration', () => {
     if (!file) {
       // No web build present; a missing /_expo/ path falls back to
       // index.html, which must stay no-store.
-      const res = await fetch(`${baseUrl}/_expo/static/js/web/missing.js`);
+      const res = await fetch(`${ctx.baseUrl}/_expo/static/js/web/missing.js`);
       expect(res.headers.get('cache-control')).toBe('no-store');
       return;
     }
-    const res = await fetch(`${baseUrl}/_expo/static/js/web/${file}`);
+    const res = await fetch(`${ctx.baseUrl}/_expo/static/js/web/${file}`);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
   });
 
   it('applies a rotated token via setToken', async () => {
     const rotated = 'b'.repeat(64);
-    server.setToken(rotated);
+    ctx.server.setToken(rotated);
     expect(authorizeRequest('192.168.1.42', `Bearer ${rotated}`, rotated)).toBe(true);
     // Old token no longer valid against the server's current token
     expect(authorizeRequest('192.168.1.42', `Bearer ${TOKEN}`, rotated)).toBe(false);
@@ -112,33 +181,23 @@ describe('standalone server integration', () => {
 });
 
 describe('per-item history undo endpoint', () => {
-  let server;
-  let baseUrl;
-  let dataDir;
+  let ctx;
   let sortDir;
 
-  beforeAll((done) => {
-    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-sorter-test-'));
+  beforeAll(async () => {
+    ctx = await startTestServer();
     sortDir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-sorter-sort-'));
     fs.writeFileSync(path.join(sortDir, 'alpha.txt'), 'alpha');
     fs.writeFileSync(path.join(sortDir, 'beta.txt'), 'beta');
-    server = createServer(path.join(__dirname, '..'), { dataDir, token: TOKEN });
-    server.listen(0, '127.0.0.1', () => {
-      baseUrl = `http://127.0.0.1:${server.address().port}`;
-      done();
-    });
   });
 
-  afterAll((done) => {
-    server.close(() => {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(sortDir, { recursive: true, force: true });
-      done();
-    });
+  afterAll(async () => {
+    await ctx.close();
+    fs.rmSync(sortDir, { recursive: true, force: true });
   });
 
   const post = (urlPath, body) =>
-    fetch(`${baseUrl}${urlPath}`, {
+    fetch(`${ctx.baseUrl}${urlPath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -158,7 +217,7 @@ describe('per-item history undo endpoint', () => {
     }
 
     // Sort responses now include the undo stack length
-    const historyRes = await fetch(`${baseUrl}/api/history`);
+    const historyRes = await fetch(`${ctx.baseUrl}/api/history`);
     const history = await historyRes.json();
     expect(history.length).toBe(2);
 
@@ -194,43 +253,31 @@ describe('per-item history undo endpoint', () => {
 });
 
 describe('mobile access endpoints', () => {
-  let server;
-  let baseUrl;
-  let dataDir;
+  let ctx;
   let toggled;
 
-  beforeAll((done) => {
-    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-sorter-test-'));
+  beforeAll(async () => {
     toggled = [];
-    server = createServer(path.join(__dirname, '..'), {
-      dataDir,
-      token: TOKEN,
+    ctx = await startTestServer({
       isMobileAccessEnabled: () => true,
       onMobileAccessToggle: (enabled) => {
         toggled.push(enabled);
       },
     });
-    server.listen(0, '127.0.0.1', () => {
-      baseUrl = `http://127.0.0.1:${server.address().port}`;
-      done();
-    });
   });
 
-  afterAll((done) => {
-    server.close(() => {
-      fs.rmSync(dataDir, { recursive: true, force: true });
-      done();
-    });
+  afterAll(async () => {
+    await ctx.close();
   });
 
   it('GET /api/mobile-access reports the enabled flag', async () => {
-    const res = await fetch(`${baseUrl}/api/mobile-access`);
+    const res = await fetch(`${ctx.baseUrl}/api/mobile-access`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ enabled: true });
   });
 
   it('POST /api/mobile-access/enabled responds before invoking the toggle handler', async () => {
-    const res = await fetch(`${baseUrl}/api/mobile-access/enabled`, {
+    const res = await fetch(`${ctx.baseUrl}/api/mobile-access/enabled`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -244,7 +291,7 @@ describe('mobile access endpoints', () => {
   });
 
   it('rejects a non-boolean enabled value', async () => {
-    const res = await fetch(`${baseUrl}/api/mobile-access/enabled`, {
+    const res = await fetch(`${ctx.baseUrl}/api/mobile-access/enabled`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: 'yes' }),
@@ -253,20 +300,18 @@ describe('mobile access endpoints', () => {
   });
 
   it('returns 501 when the host provides no toggle handler', async () => {
-    const bare = createServer(path.join(__dirname, '..'), { dataDir, token: TOKEN });
-    await new Promise((resolve) => bare.listen(0, '127.0.0.1', resolve));
-    const bareUrl = `http://127.0.0.1:${bare.address().port}`;
+    const bare = await startTestServer();
     try {
-      const res = await fetch(`${bareUrl}/api/mobile-access/enabled`, {
+      const res = await fetch(`${bare.baseUrl}/api/mobile-access/enabled`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false }),
       });
       expect(res.status).toBe(501);
-      const state = await fetch(`${bareUrl}/api/mobile-access`);
+      const state = await fetch(`${bare.baseUrl}/api/mobile-access`);
       expect(await state.json()).toEqual({ enabled: false });
     } finally {
-      await new Promise((resolve) => bare.close(resolve));
+      await bare.close();
     }
   });
 });

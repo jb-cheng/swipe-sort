@@ -14,12 +14,12 @@
  */
 const http = require('http');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { StateManager } = require('../services/StateManager');
 const { scanFolder, readFilePreview } = require('../services/fileOps');
 const { PreviewService } = require('../services/previewService');
+const { getLanIPv4 } = require('../electron/mobile-access');
 
 // ── MIME types for static serving ─────────────────────────────────
 const MIME = {
@@ -66,17 +66,34 @@ function authorizeRequest(remoteAddress, authHeader, token) {
   return crypto.timingSafeEqual(presented, expected);
 }
 
-/** Find the first non-internal IPv4 address (LAN IP) for CLI output. */
-function findLanIPv4() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
+/**
+ * Host-header allow-list check for API routes (DNS rebinding defense).
+ *
+ * A browser visiting evil.example.com can be pointed at this server via
+ * DNS rebinding; its requests then arrive with a Host header we never
+ * intend to serve. Only loopback names and the current LAN IP are allowed.
+ */
+function isAllowedHost(hostHeader) {
+  if (!hostHeader) return false;
+  const host = hostHeader.replace(/:\d+$/, '').toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') {
+    return true;
   }
-  return null;
+  const lanIp = getLanIPv4();
+  return lanIp !== null && host === lanIp;
+}
+
+/**
+ * Detect a cross-origin browser request (Origin host differs from Host).
+ * Same-origin requests are the only kind this server should ever see.
+ */
+function isCrossOrigin(originHeader, hostHeader) {
+  if (!originHeader) return false;
+  try {
+    return new URL(originHeader).host !== hostHeader;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -130,23 +147,22 @@ function createServer(projectDir, options = {}) {
   });
 
   async function handleRequest(req, res) {
-    // CORS headers for local development
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
 
     try {
       // ── Authorization gate for all API routes ───────────────────
       if (pathname.startsWith('/api/')) {
+        // No CORS headers anywhere: both clients are same-origin, and a
+        // wildcard origin would let any web page drive this API.
+        if (!isAllowedHost(req.headers.host)) {
+          respondJson(res, 403, { error: 'Forbidden host' });
+          return;
+        }
+        if (isCrossOrigin(req.headers.origin, req.headers.host)) {
+          respondJson(res, 403, { error: 'Cross-origin requests are not allowed' });
+          return;
+        }
         if (!authorizeRequest(req.socket.remoteAddress, req.headers.authorization, token)) {
           respondJson(res, 401, { error: 'Invalid or missing pairing token' });
           return;
@@ -376,7 +392,7 @@ if (require.main === module) {
   server.listen(port, () => {
     console.log(`[standalone] File Sorter server on http://localhost:${port}`);
     console.log(`[standalone] Data directory: ${dataDir}`);
-    const lanIp = findLanIPv4();
+    const lanIp = getLanIPv4();
     if (lanIp) {
       console.log(`[standalone] Mobile access: http://${lanIp}:${port}/?t=${token}`);
     } else {
@@ -385,4 +401,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, authorizeRequest, isLoopbackAddress };
+module.exports = { createServer, authorizeRequest, isLoopbackAddress, isAllowedHost, getLanIPv4 };

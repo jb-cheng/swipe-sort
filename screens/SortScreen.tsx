@@ -18,7 +18,7 @@ import FullscreenPreview from '../components/FullscreenPreview';
 import TutorialTarget from '../components/TutorialTarget';
 import { FileItem, SortAction, HistoryRecord, MobileAccessInfo } from '../lib/types';
 import { loadActions, addHistory } from '../lib/storage';
-import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort, getMobileAccess, onMobileAccessChanged, setMobileAccessEnabled } from '../lib/api';
+import { pregeneratePreviews, openFile, revealInFolder, fetchState, setFolder, sortFile, undoSort, getMobileAccess, onMobileAccessChanged, setMobileAccessEnabled, displayPairingUrl } from '../lib/api';
 import { DEMO_FILES } from '../lib/demoFiles';
 import { useTheme } from '../lib/ThemeContext';
 import { useTutorial } from '../lib/TutorialContext';
@@ -47,10 +47,10 @@ export default function SortScreen() {
 
   const isElectron = typeof (window as any).electronAPI !== 'undefined';
   // Single active sorter: while remote control is enabled, the phone owns
-  // sorting and the desktop becomes a read-only viewer.
-  const remoteLocked = !demoMode && isElectron && mobileAccessInfo?.enabled === true;
-  const queueLenRef = useRef(queue.length);
-  queueLenRef.current = queue.length;
+  // sorting and the desktop becomes a read-only viewer. Treat "status not
+  // yet fetched" (null) as locked too, so the desktop never gets an
+  // unlocked window before the IPC round-trip completes.
+  const remoteLocked = !demoMode && isElectron && mobileAccessInfo?.enabled !== false;
 
   // Track previously dismissed file IDs for cleanup
   const dismissedRef = useRef<Set<string>>(new Set());
@@ -60,7 +60,8 @@ export default function SortScreen() {
     getMobileAccess().then((info) => {
       if (info) setMobileAccessInfo(info);
     });
-    onMobileAccessChanged(setMobileAccessInfo);
+    const unsubscribe = onMobileAccessChanged(setMobileAccessInfo);
+    return unsubscribe;
   }, []);
 
   // Reload actions from AsyncStorage and refresh server state every time the tab gains focus
@@ -104,13 +105,13 @@ export default function SortScreen() {
 
     const interval = setInterval(async () => {
       try {
+        // Mirror the server state unconditionally: comparing only the queue
+        // length misses same-length swaps (undo + re-sort) and other
+        // devices' sortedCount/undo changes.
         const state = await fetchState();
-        if (state.files.length !== queueLenRef.current) {
-          setQueue(state.files);
-        }
-        if (state.folderPath && state.folderPath !== folderPath) {
-          setFolderPath(state.folderPath);
-        }
+        setQueue(state.files);
+        setFolderPath(state.folderPath);
+        setSortedCount(state.history.length);
         setUndoAvailable((state.undoStack?.length ?? 0) > 0);
       } catch {
         // server unreachable — keep current state; DisconnectedOverlay
@@ -118,39 +119,30 @@ export default function SortScreen() {
       }
     }, 3000);
     return () => clearInterval(interval);
-  }, [folderPath, shouldPoll, isElectron]);
+  }, [shouldPoll]);
 
-  const loadFromServer = async () => {
+  // Load state from the server. showSpinner=true for full loads (mount,
+  // retry); false for background resyncs when another device already
+  // consumed the current card or the undo stack.
+  const loadFromServer = useCallback(async (showSpinner = true) => {
     try {
-      setLoading(true);
-      setError(null);
+      if (showSpinner) {
+        setLoading(true);
+        setError(null);
+      }
       const state = await fetchState();
       setQueue(state.files);
       setFolderPath(state.folderPath);
-      if (state.history.length > 0) {
-        setSortedCount(state.history.length);
-      }
+      setSortedCount(state.history.length);
       setUndoAvailable((state.undoStack?.length ?? 0) > 0);
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     } catch (e: any) {
-      setError(e.message || 'Cannot connect to server');
-      setLoading(false);
+      if (showSpinner) {
+        setError(e.message || 'Cannot connect to server');
+        setLoading(false);
+      }
+      // Background resync: server unreachable, keep current state
     }
-  };
-
-  // Refresh queue/undo from the server without the loading spinner.
-  // Used to recover when another device already consumed the current card.
-  const resyncFromServer = useCallback(() => {
-    fetchState()
-      .then((state) => {
-        setQueue(state.files);
-        if (state.folderPath) setFolderPath(state.folderPath);
-        setSortedCount(state.history.length);
-        setUndoAvailable((state.undoStack?.length ?? 0) > 0);
-      })
-      .catch(() => {
-        // server unreachable — keep current state
-      });
   }, []);
 
   const displayedQueue = demoMode ? demoQueue : queue;
@@ -158,6 +150,7 @@ export default function SortScreen() {
   const effectiveUndoAvailable = demoMode ? demoUndo.length > 0 : undoAvailable;
 
   const handlePickFolder = async () => {
+    if (remoteLocked) return;
     let pickedPath: string | null = null;
 
     // Electron: use native folder dialog
@@ -217,7 +210,7 @@ export default function SortScreen() {
         if (/not found in queue/i.test(e?.message || '')) {
           // Another device already sorted this file — resync instead of
           // leaving a stale card on screen.
-          resyncFromServer();
+          loadFromServer(false);
         }
         return;
       }
@@ -246,7 +239,7 @@ export default function SortScreen() {
       // Pre-generate previews for the next files in the queue (lazy loading)
       pregeneratePreviews(5).catch(() => {});
     },
-    [current, demoMode, activeAction, notifyTutorial, resyncFromServer],
+    [current, demoMode, activeAction, notifyTutorial, loadFromServer],
   );
 
   const handleUndo = async () => {
@@ -272,7 +265,7 @@ export default function SortScreen() {
       console.warn('Undo failed:', e.message);
       if (/nothing to undo/i.test(e?.message || '')) {
         // Another device already consumed the undo stack — resync silently.
-        resyncFromServer();
+        loadFromServer(false);
       }
     }
   };
@@ -339,7 +332,7 @@ export default function SortScreen() {
         )}
       </View>
       <View style={styles.badgeRow}>
-        {folderPath && isElectron && !demoMode && (
+        {folderPath && isElectron && !demoMode && !remoteLocked && (
           <Pressable
             onPress={handlePickFolder}
             accessibilityLabel="Switch folder"
@@ -369,7 +362,9 @@ export default function SortScreen() {
   );
 
   const renderRemoteLockBanner = () => {
-    if (!remoteLocked) return null;
+    // Banner only once we know remote control is on; remoteLocked also
+    // covers the "status not yet fetched" case, which must not show it.
+    if (!remoteLocked || mobileAccessInfo?.enabled !== true) return null;
     return (
       <View style={[styles.remoteLockBanner, { backgroundColor: colors.accentSoft }]}>
         <View style={styles.remoteLockTextRow}>
@@ -412,7 +407,7 @@ export default function SortScreen() {
       subtitle={isElectron
         ? 'Could not load files. Check the folder path.'
         : 'Make sure the desktop app is running and the server is active.'}
-      actions={[{ label: 'Retry', onPress: loadFromServer }]}
+      actions={[{ label: 'Retry', onPress: () => loadFromServer() }]}
     />
   );
 
@@ -428,7 +423,7 @@ export default function SortScreen() {
       />
       {mobileAccessInfo?.enabled && mobileAccessInfo.url && (
         <Text style={[styles.tailscaleHint, { color: colors.textMuted }]}>
-          Mobile access: {mobileAccessInfo.url.split('/?t=')[0]}
+          Mobile access: {displayPairingUrl(mobileAccessInfo)}
         </Text>
       )}
     </View>

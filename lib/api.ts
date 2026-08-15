@@ -42,7 +42,7 @@ function getElectronAPI() {
     getMobileAccess(): Promise<MobileAccessInfo>;
     setMobileAccessEnabled(enabled: boolean): Promise<MobileAccessInfo>;
     resetMobileToken(): Promise<MobileAccessInfo>;
-    onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): void;
+    onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): () => void;
   };
 }
 
@@ -98,6 +98,17 @@ capturePairingToken();
 
 // ── HTTP transport ────────────────────────────────────────────────
 
+/** Error carrying the HTTP status so callers can tell e.g. 401 from offline. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -105,7 +116,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { headers: await authHeaders() });
-  if (!res.ok) throw new Error(`Server error: ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, `Server error: ${res.status}`);
   return res.json();
 }
 
@@ -119,7 +130,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error || `Server error: ${res.status}`);
+    throw new ApiError(res.status, err.error || `Server error: ${res.status}`);
   }
   return res.json();
 }
@@ -162,7 +173,7 @@ export async function fetchHistory(): Promise<HistoryRecord[]> {
   return apiGet('/api/history');
 }
 
-/** Clear server-side history (keeps folder, queue, and undo stack). */
+/** Clear server-side history (also clears the undo stack; keeps folder and queue). */
 export async function clearServerHistory(): Promise<void> {
   await apiPost('/api/clear-history');
 }
@@ -336,12 +347,22 @@ export async function resetMobileToken(): Promise<MobileAccessInfo | null> {
   }
 }
 
-/** Subscribe to mobile access status changes (desktop only). */
-export function onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): void {
-  if (!isElectron()) return;
+/**
+ * Subscribe to mobile access status changes (desktop only).
+ * Returns an unsubscribe function for effect cleanup.
+ */
+export function onMobileAccessChanged(callback: (info: MobileAccessInfo) => void): () => void {
+  if (!isElectron()) return () => {};
   try {
-    getElectronAPI().onMobileAccessChanged(callback);
+    const unsubscribe = getElectronAPI().onMobileAccessChanged(callback);
+    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
   } catch {
-    // ignore
+    return () => {};
   }
+}
+
+/** Pairing URL safe to display in the UI (token stripped). */
+export function displayPairingUrl(info: MobileAccessInfo | null): string | null {
+  if (!info || !info.url) return null;
+  return info.url.split('/?t=')[0];
 }

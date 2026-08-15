@@ -10,6 +10,7 @@ let serverPort = null;
 let mobileConfig = null;
 let captureWindow = null;
 let captureLock = Promise.resolve();
+let rebindLock = Promise.resolve();
 
 // ── DOCX visual capture (hidden BrowserWindow) ────────────────────
 
@@ -94,14 +95,23 @@ function startServer() {
 function restartServer() {
   return new Promise((resolve, reject) => {
     if (!appServer) return resolve();
-    if (typeof appServer.closeAllConnections === 'function') {
-      appServer.closeAllConnections();
-    }
+    appServer.closeAllConnections();
     appServer.close(() => {
       serverPort = null;
       startServer().then(resolve).catch(reject);
     });
   });
+}
+
+/**
+ * Re-bind only when the actual bind address differs from the desired one.
+ * Lets queued toggles coalesce into a single rebind.
+ */
+function rebindIfNeeded() {
+  if (!appServer) return;
+  const address = appServer.address();
+  if (address && address.address === bindHost()) return;
+  return restartServer();
 }
 
 /** Snapshot of mobile access info for the renderer. */
@@ -131,12 +141,14 @@ function broadcastMobileAccess() {
  */
 async function applyMobileAccessEnabled(enabled) {
   const next = enabled === true;
-  const changed = mobileConfig.enabled !== next;
   mobileConfig.enabled = next;
   mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
-  if (changed) {
-    await restartServer();
-  }
+  // Serialize rebinds: concurrent toggles from desktop IPC and the phone's
+  // HTTP request must not race on server.close().
+  rebindLock = rebindLock.then(rebindIfNeeded).catch((err) => {
+    console.warn('[electron] Server rebind failed:', err.message);
+  });
+  await rebindLock;
   broadcastMobileAccess();
   return getMobileAccessInfo();
 }
@@ -177,7 +189,9 @@ app.whenReady().then(async () => {
     },
   });
 
-  mainWindow.loadURL(`http://localhost:${serverPort}`);
+  // Use the loopback IP, not `localhost`: it resolves deterministically and
+  // matches the server's Host allow-list without name-resolution surprises.
+  mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
 
   // Apply persisted window settings (stay-on-top, etc.)
   const settings = loadWindowSettings();
@@ -245,7 +259,7 @@ ipcMain.handle('set-mobile-access-enabled', (_event, enabled) => {
 ipcMain.handle('reset-mobile-token', async () => {
   mobileConfig.token = mobileAccess.generateToken();
   mobileAccess.saveConfig(app.getPath('userData'), mobileConfig);
-  if (appServer && typeof appServer.setToken === 'function') {
+  if (appServer) {
     appServer.setToken(mobileConfig.token);
   }
   broadcastMobileAccess();
@@ -318,6 +332,6 @@ app.on('activate', () => {
         nodeIntegration: false,
       },
     });
-    mainWindow.loadURL(`http://localhost:${serverPort}`);
+    mainWindow.loadURL(`http://127.0.0.1:${serverPort}`);
   }
 });

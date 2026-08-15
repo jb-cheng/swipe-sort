@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,9 +11,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { HistoryRecord } from '../lib/types';
+import { HistoryRecord, MobileAccessInfo } from '../lib/types';
 import { loadHistory, clearHistory, removeHistoryRecord } from '../lib/storage';
-import { fetchHistory, clearServerHistory, revealInFolder, undoHistoryItem } from '../lib/api';
+import { fetchHistory, clearServerHistory, revealInFolder, undoHistoryItem, getMobileAccess, onMobileAccessChanged, isElectron } from '../lib/api';
 import { sortedDestinationPath } from '../lib/fileHelpers';
 import { useTheme } from '../lib/ThemeContext';
 import FileIcon from '../components/FileIcon';
@@ -30,7 +30,21 @@ export default function HistoryScreen() {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [undoingId, setUndoingId] = useState<string | null>(null);
   const [undoError, setUndoError] = useState<string | null>(null);
+  const [mobileAccessInfo, setMobileAccessInfo] = useState<MobileAccessInfo | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track mobile access so the remote-sort lock also covers this screen:
+  // undoing a history entry moves files and re-queues them, which a
+  // locked desktop must not do while a phone is in control.
+  useEffect(() => {
+    if (!isElectron()) return;
+    getMobileAccess().then((info) => {
+      if (info) setMobileAccessInfo(info);
+    });
+    return onMobileAccessChanged(setMobileAccessInfo);
+  }, []);
+
+  const remoteLocked = isElectron() && mobileAccessInfo?.enabled !== false;
 
   useFocusEffect(
     useCallback(() => {
@@ -42,17 +56,16 @@ export default function HistoryScreen() {
   );
 
   const loadHistoryData = async () => {
-    // Try server first (covers both IPC and HTTP modes)
+    // Server first (single source of truth). Only fall back to the local
+    // AsyncStorage cache when the fetch itself fails; an empty server
+    // history means the history is genuinely empty (e.g. after Clear).
     try {
       const serverHistory = await fetchHistory();
-      if (serverHistory.length > 0) {
-        setHistory(serverHistory);
-        return;
-      }
+      setHistory(serverHistory);
+      return;
     } catch {
       // server unreachable, fall back to local
     }
-    // Fallback: load from AsyncStorage
     const local = await loadHistory();
     setHistory(local);
   };
@@ -64,6 +77,7 @@ export default function HistoryScreen() {
   };
 
   const onClear = async () => {
+    if (remoteLocked) return;
     await clearHistory();
     await clearServerHistory().catch(() => {});
     setHistory([]);
@@ -74,7 +88,7 @@ export default function HistoryScreen() {
    * and re-queues it at the top of the Sort tab.
    */
   const onUndoRecord = async (item: HistoryRecord) => {
-    if (undoingId) return;
+    if (undoingId || remoteLocked) return;
     setUndoingId(item.id);
     try {
       await undoHistoryItem(item.id);
@@ -133,11 +147,14 @@ export default function HistoryScreen() {
         </View>
         <Pressable
           onPress={() => onUndoRecord(item)}
-          disabled={!!undoingId}
+          disabled={!!undoingId || remoteLocked}
           accessibilityLabel={`Undo sorting of ${item.file.name}`}
           style={({ pressed }) => [
             styles.undoButton,
-            { backgroundColor: colors.accentSoft, opacity: undoingId && !isUndoing ? 0.4 : 1 },
+            {
+              backgroundColor: colors.accentSoft,
+              opacity: remoteLocked ? 0.35 : undoingId && !isUndoing ? 0.4 : 1,
+            },
             pressed && { opacity: 0.7 },
           ]}
         >
@@ -166,7 +183,11 @@ export default function HistoryScreen() {
           </Text>
         </View>
         {history.length > 0 && (
-          <Pressable onPress={onClear} style={styles.clearButton}>
+          <Pressable
+            onPress={onClear}
+            disabled={remoteLocked}
+            style={[styles.clearButton, remoteLocked && { opacity: 0.35 }]}
+          >
             <Text style={styles.clearText}>Clear</Text>
           </Pressable>
         )}

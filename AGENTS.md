@@ -8,8 +8,8 @@ An Expo React Native + Electron app for sorting/triaging real files by swiping (
 
 ## Project
 
-- **Stack:** Expo (React Native, TypeScript), Electron, Express (Node.js), `react-native-reanimated` (gestures), `@react-navigation/native` (bottom tabs), `@react-native-async-storage/async-storage` (persistence for settings)
-- **Entry point:** `./App.tsx` (React UI), `./electron/main.js` (Electron), `./server/index.js` (Express server)
+- **Stack:** Expo (React Native, TypeScript), Electron, Node.js built-in HTTP server (no Express), `react-native-reanimated` (gestures), `@react-navigation/native` (bottom tabs), `@react-native-async-storage/async-storage` (persistence for settings)
+- **Entry point:** `./App.tsx` (React UI), `./electron/main.js` (Electron), `./server/standalone.js` (embedded HTTP server)
 - **App name:** "File Sorter", appId `com.arcadalabs.file-sorter`
 
 ## Commands
@@ -52,7 +52,6 @@ The desktop embeds one HTTP server (`server/standalone.js`) that manages all sta
 | `electron/preload.js` | Context bridge exposing native-only methods (`pickFolder()`, `getMobileAccess()`, etc.) |
 | `electron/mobile-access.js` | Pairing token/enabled flag persistence, LAN IP discovery, pairing URL builder |
 | `server/standalone.js` | HTTP server: REST API, static web build, pairing-token authorization for non-loopback clients |
-| `server/index.js` | Express server (legacy wrapper, same REST API) |
 | `screens/SortScreen.tsx` | Main sorting screen — fetches state from server, shows file queue, calls `/api/sort` on swipe, polls server every 3s for multi-device sync |
 | `screens/HistoryScreen.tsx` | Lists past sorted files — fetches from server API, falls back to AsyncStorage |
 | `screens/SettingsScreen.tsx` | Customizes the 4 sort actions (label, keyboard key, swipe direction, color); persists to AsyncStorage |
